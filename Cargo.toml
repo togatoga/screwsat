@@ -1,0 +1,9 @@
+[package]
+name = "screwsat"
+version = "0.1.0"
+authors = ["togatoga <togasakitogatoga@gmail.com>"]
+edition = "2018"
+description = "A simple condlict driven clause learning sat solver"
+license = "MIT"
+
+[dependencies]
