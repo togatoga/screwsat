@@ -9,14 +9,14 @@ pub mod screwsat {
     pub type Lit = (Var, bool); //(0, true) means x0 and (0, false) means not x0.
 
     pub struct Solver {
-        n: usize,                           // variables
-        pub assigns: Vec<bool>,             // assignments
+        n: usize,                           // the number of variables
+        pub assigns: Vec<bool>,             // assignments for each varialbes
         clauses: Vec<Vec<Lit>>,             // all clauses(original + learnt)
         watchers: HashMap<Lit, Vec<usize>>, // clauses that may be conflicted or propagated if a `lit` is false.
         reason: Vec<Option<usize>>, // a clause index represents that a variable is forced to be assigned.
         level: Vec<usize>,          // decision level(0: unassigned, 1: minimum level)
-        que: VecDeque<Var>,         //
-        head: usize,
+        que: VecDeque<Var>,         // assigned variables
+        head: usize,                // the head of que's unchecked front
     }
 
     impl Solver {
