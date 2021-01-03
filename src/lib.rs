@@ -7,7 +7,13 @@ pub mod screwsat {
 
     pub type Var = usize;
     pub type Lit = (Var, bool); //(0, true) means x0 and (0, false) means not x0.
+    pub enum Status {
+        Sat,
+        Unsat,
+        Indeterminate,
+    }
 
+    #[derive(Debug, Default)]
     pub struct Solver {
         n: usize,                           // the number of variables
         pub assigns: Vec<bool>,             // assignments for each varialbes
@@ -31,15 +37,36 @@ pub mod screwsat {
             };
             self.que.push_back(var);
         }
+        pub fn new_var(&mut self) {
+            self.n += 1;
+            self.assigns.push(false);
+            self.reason.push(None);
+            self.level.push(0);
+        }
 
-        /// Add a new clause to `clauses` and watch a clause
-        fn add_clause(&mut self, clause: &[Lit]) {
+        /// This method is only for internal usage and almost same as `add_clause`
+        /// But, this method doesn't grow the size of array.
+        fn add_clause_unchecked(&mut self, clause: &[Lit]) {
             let clause_idx = self.clauses.len();
             for &c in clause.iter() {
                 self.watchers.entry(c).or_insert(vec![]).push(clause_idx);
             }
             self.clauses.push(clause.to_vec());
         }
+
+        /// Add a new clause to `clauses` and watch a clause.
+        /// If a variable is greater than the size of array, grow it.
+        pub fn add_clause(&mut self, clause: &[Lit]) {
+            let clause_idx = self.clauses.len();
+            for &c in clause.iter() {
+                while c.0 >= self.assigns.len() {
+                    self.new_var();
+                }
+                self.watchers.entry(c).or_insert(vec![]).push(clause_idx);
+            }
+            self.clauses.push(clause.to_vec());
+        }
+
         /// Propagate it by all enqueued values and check conflicts.
         /// If a conflict is detected, this function returns a conflicted clause index.
         /// `None` is no conflicts.
@@ -146,7 +173,7 @@ pub mod screwsat {
             // propagate it by a new learnt clause
             self.enqueue(p, !self.assigns[p], Some(self.clauses.len()));
             self.head = self.que.len() - 1;
-            self.add_clause(&learnt_clause);
+            self.add_clause_unchecked(&learnt_clause);
         }
 
         pub fn new(n: usize, clauses: &Vec<Vec<Lit>>) -> Solver {
@@ -161,26 +188,38 @@ pub mod screwsat {
                 watchers: HashMap::new(),
             };
             for clause in clauses.iter() {
-                solver.add_clause(clause);
+                solver.add_clause_unchecked(clause);
             }
             solver
         }
-        /// msec is the time limit.
-        /// Reaching the time limit returns `falsez
-        pub fn solve(&mut self, msec: Option<u64>) -> bool {
+
+        pub fn reserve_clause(&mut self, cla_num: usize) {
+            self.clauses.reserve(cla_num);
+        }
+        pub fn reserve_variable(&mut self, var_num: usize) {
+            self.que.reserve(var_num);
+            self.clauses.reserve(var_num);
+            self.reason.reserve(var_num);
+            self.level.reserve(var_num);
+            self.assigns.reserve(var_num);
+        }
+        /// Solve a problem and return
+        /// `true` if solver finds a SATISFIABLE assignments
+        /// `false` if solver finds a given problem is UNSATISFIABLE or reach the time limit
+        pub fn solve(&mut self, msec: Option<u64>) -> Status {
             let start = Instant::now();
             loop {
                 if let Some(msec) = msec {
                     // reach the time limit
                     if start.elapsed() > Duration::from_millis(msec) {
-                        return false;
+                        return Status::Indeterminate;
                     }
                 }
                 if let Some(confl) = self.propagate() {
                     //Conflict
                     let current_level = self.level[*self.que.back().unwrap()];
                     if current_level == 1 {
-                        return false;
+                        return Status::Unsat;
                     }
                     self.analyze(confl);
                 } else {
@@ -198,7 +237,7 @@ pub mod screwsat {
                         self.level[p] += 1;
                     } else {
                         // all variables are selected. which means that a formula is satisfied
-                        return true;
+                        return Status::Sat;
                     }
                 }
             }
