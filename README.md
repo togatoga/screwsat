@@ -6,7 +6,12 @@ This code is really inspired by [no522's SAT Solver](https://github.com/not522/C
 `screwsat` can be used as a library and a command line tool. 
 
 ## As a cmd line tool
+### Install
+```
+% cargo install --git https://github.com/togatoga/screwsat
+```
 
+### Usage
 ```
 % screwsat --help
 USAGE: screwsat [options] <input-file> [output-file]
