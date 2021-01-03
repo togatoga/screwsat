@@ -1,21 +1,21 @@
 pub mod screwsat {
     use std::{
-        collections::{HashMap, HashSet},
+        collections::{HashMap, HashSet, VecDeque},
         time::{Duration, Instant},
         vec,
     };
 
     pub type Var = usize;
-    pub type Lit = (Var, bool);
+    pub type Lit = (Var, bool); //(0, true) means x0 and (0, false) means not x0.
 
     pub struct Solver {
-        n: usize,
-        pub assigns: Vec<bool>,
-        clauses: Vec<Vec<Lit>>,
+        n: usize,                           // variables
+        pub assigns: Vec<bool>,             // assignments
+        clauses: Vec<Vec<Lit>>,             // all clauses(original + learnt)
         watchers: HashMap<Lit, Vec<usize>>, // clauses that may be conflicted or propagated if a `lit` is false.
-        reason: Vec<Option<usize>>,
-        level: Vec<usize>, // decision level
-        que: Vec<Var>,
+        reason: Vec<Option<usize>>, // a clause index represents that a variable is forced to be assigned.
+        level: Vec<usize>,          // decision level(0: unassigned, 1: minimum level)
+        que: VecDeque<Var>,         //
         head: usize,
     }
 
@@ -24,12 +24,12 @@ pub mod screwsat {
         pub fn enqueue(&mut self, var: Var, assign: bool, reason: Option<usize>) {
             self.assigns[var] = assign;
             self.reason[var] = reason;
-            self.level[var] = if let Some(last) = self.que.last() {
+            self.level[var] = if let Some(last) = self.que.back() {
                 self.level[*last]
             } else {
                 1
             };
-            self.que.push(var);
+            self.que.push_back(var);
         }
 
         /// Add a new clause to `clauses` and watch a clause
@@ -81,12 +81,12 @@ pub mod screwsat {
 
                             self.assigns[var] = sign;
                             self.reason[var] = Some(cr);
-                            self.level[var] = if let Some(last) = self.que.last() {
+                            self.level[var] = if let Some(last) = self.que.back() {
                                 self.level[*last]
                             } else {
                                 1
                             };
-                            self.que.push(var);
+                            self.que.push_back(var);
                         }
                     }
                 }
@@ -97,7 +97,7 @@ pub mod screwsat {
         fn analyze(&mut self, mut confl: usize) {
             let mut que_tail = self.que.len() - 1;
             let mut checked_vars = HashSet::new();
-            let current_level = self.level[*self.que.last().unwrap()];
+            let current_level = self.level[self.que[que_tail]];
 
             let mut learnt_clause = vec![];
             let mut backtrack_level = 1;
@@ -135,10 +135,10 @@ pub mod screwsat {
             learnt_clause.push((p, !self.assigns[p]));
 
             // Cancel decisions until the level is less than equal to the backtrack level
-            while let Some(p) = self.que.last() {
+            while let Some(p) = self.que.back() {
                 if self.level[*p] > backtrack_level {
                     self.level[*p] = 0;
-                    self.que.pop();
+                    self.que.pop_back();
                 } else {
                     break;
                 }
@@ -152,7 +152,7 @@ pub mod screwsat {
         pub fn new(n: usize, clauses: &Vec<Vec<Lit>>) -> Solver {
             let mut solver = Solver {
                 n,
-                que: Vec::new(),
+                que: VecDeque::new(),
                 head: 0,
                 clauses: Vec::new(),
                 reason: vec![None; n],
@@ -178,8 +178,7 @@ pub mod screwsat {
                 }
                 if let Some(confl) = self.propagate() {
                     //Conflict
-                    let current_level = self.level[*self.que.last().unwrap()];
-                    //dbg!(current_level);
+                    let current_level = self.level[*self.que.back().unwrap()];
                     if current_level == 1 {
                         return false;
                     }
@@ -194,7 +193,6 @@ pub mod screwsat {
                             break;
                         }
                     }
-                    //dbg!(p);
                     if let Some(p) = p {
                         self.enqueue(p, self.assigns[p], None);
                         self.level[p] += 1;
