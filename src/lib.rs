@@ -176,7 +176,7 @@ pub mod screwsat {
             self.add_clause_unchecked(&learnt_clause);
         }
 
-        pub fn new(n: usize, clauses: &Vec<Vec<Lit>>) -> Solver {
+        pub fn new(n: usize, clauses: &[Vec<Lit>]) -> Solver {
             let mut solver = Solver {
                 n,
                 que: VecDeque::new(),

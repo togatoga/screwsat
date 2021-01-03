@@ -52,7 +52,7 @@ fn parse_cnf(input_file: &str) -> std::io::Result<ParsedResult> {
             .take_while(|x| *x != 0)
             .collect();
 
-        if values.len() == 0 {
+        if values.is_empty() {
             println!("Invalid Line {} : {}", num, line);
             std::process::exit(1);
         }
@@ -165,17 +165,15 @@ fn main() {
     let status = solver.solve(None);
     let (writer, to_file): (Box<dyn std::io::Write>, bool) = if let Some(output_file) = output_file
     {
-        let f = File::create(output_file).expect(&format!("Failed to open {}", output_file));
+        let f =
+            File::create(output_file).unwrap_or_else(|_| panic!("Failed to open {}", output_file));
         (Box::new(f), true)
     } else {
         (Box::new(std::io::stdout()), false)
     };
-    match print_result(solver, status, writer, to_file) {
-        Err(e) => {
-            println!("{}", e);
-            std::process::exit(1);
-        }
-        _ => {}
+    if let Err(e) = print_result(solver, status, writer, to_file) {
+        println!("{}", e);
+        std::process::exit(1);
     }
     std::process::exit(0);
 }
