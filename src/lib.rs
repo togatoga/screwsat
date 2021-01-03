@@ -7,6 +7,7 @@ pub mod screwsat {
 
     pub type Var = usize;
     pub type Lit = (Var, bool); //(0, true) means x0 and (0, false) means not x0.
+    #[derive(PartialEq)]
     pub enum Status {
         Sat,
         Unsat,
@@ -152,10 +153,11 @@ pub mod screwsat {
 
                 same_level_cnt -= 1;
                 // There is no variables that are at the conflict level
-                if same_level_cnt <= 1 {
+                if same_level_cnt <= 0 {
                     break;
                 }
                 // Next
+                debug_assert_eq!(self.level[self.que[que_tail]], current_level);
                 confl = self.reason[self.que[que_tail]].unwrap();
             }
             let p = self.que[que_tail];
