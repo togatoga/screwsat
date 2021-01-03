@@ -48,6 +48,7 @@ pub mod screwsat {
         /// This method is only for internal usage and almost same as `add_clause`
         /// But, this method doesn't grow the size of array.
         fn add_clause_unchecked(&mut self, clause: &[Lit]) {
+            assert!(clause.len() >= 2);
             let clause_idx = self.clauses.len();
             for &c in clause.iter() {
                 self.watchers.entry(c).or_insert(vec![]).push(clause_idx);
@@ -58,6 +59,10 @@ pub mod screwsat {
         /// Add a new clause to `clauses` and watch a clause.
         /// If a variable is greater than the size of array, grow it.
         pub fn add_clause(&mut self, clause: &[Lit]) {
+            if clause.len() == 1 {
+                self.enqueue(clause[0].0, clause[0].1, None);
+                return;
+            }
             let clause_idx = self.clauses.len();
             for &c in clause.iter() {
                 while c.0 >= self.assigns.len() {
@@ -130,9 +135,16 @@ pub mod screwsat {
             let mut learnt_clause = vec![];
             let mut backtrack_level = 1;
             let mut same_level_cnt = 0;
+            let mut skip = false;
             loop {
                 for p in self.clauses[confl].iter() {
                     let (var, _) = *p;
+                    if skip && var == self.que[que_tail] {
+                        continue;
+                    }
+                    if self.level[var] == 0 {
+                        continue;
+                    }
                     // already checked
                     if !checked_vars.insert(var) {
                         continue;
@@ -157,11 +169,16 @@ pub mod screwsat {
                     break;
                 }
                 // Next
+                skip = true;
+                checked_vars.remove(&self.que[que_tail]);
                 debug_assert_eq!(self.level[self.que[que_tail]], current_level);
                 confl = self.reason[self.que[que_tail]].unwrap();
             }
             let p = self.que[que_tail];
             learnt_clause.push((p, !self.assigns[p]));
+            if learnt_clause.len() == 1 {
+                backtrack_level = 1;
+            }
 
             // Cancel decisions until the level is less than equal to the backtrack level
             while let Some(p) = self.que.back() {
@@ -173,9 +190,14 @@ pub mod screwsat {
                 }
             }
             // propagate it by a new learnt clause
-            self.enqueue(p, !self.assigns[p], Some(self.clauses.len()));
-            self.head = self.que.len() - 1;
-            self.add_clause_unchecked(&learnt_clause);
+            if learnt_clause.len() == 1 {
+                self.enqueue(p, !self.assigns[p], None);
+                self.head = self.que.len() - 1;
+            } else {
+                self.enqueue(p, !self.assigns[p], Some(self.clauses.len()));
+                self.head = self.que.len() - 1;
+                self.add_clause_unchecked(&learnt_clause);
+            }
         }
 
         pub fn new(n: usize, clauses: &[Vec<Lit>]) -> Solver {
@@ -190,7 +212,11 @@ pub mod screwsat {
                 watchers: HashMap::new(),
             };
             for clause in clauses.iter() {
-                solver.add_clause_unchecked(clause);
+                if clause.len() == 1 {
+                    solver.enqueue(clause[0].0, clause[0].1, None);
+                } else {
+                    solver.add_clause_unchecked(clause);
+                }
             }
             solver
         }
