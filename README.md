@@ -8,7 +8,7 @@ This code is really inspired by [no522's SAT Solver](https://github.com/not522/C
 ## As a cmd line tool
 ### Install
 ```
-% cargo install --git https://github.com/togatoga/screwsat
+% cargo install --locked screwsat
 ```
 
 ### Usage
