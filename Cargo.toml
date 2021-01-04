@@ -5,5 +5,13 @@ authors = ["togatoga <togasakitogatoga@gmail.com>"]
 edition = "2018"
 description = "A simple condlict driven clause learning sat solver"
 license = "MIT"
+readme = "README.md"
+
+categories = ["algorithms", "command-line-utilities"]
+keywords = ["solver", "satisfiability", "sat"]
 
 [dependencies]
+
+
+[badges]
+github = { repository = "togatoga/screwsat", workflow = "Rust" }
