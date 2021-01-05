@@ -1,5 +1,5 @@
 # screwsat
-![Crates.io](https://img.shields.io/crates/v/screwsat)
+[![Crates.io](https://img.shields.io/crates/v/screwsat)](https://crates.io/crates/screwsat)
 
 A very simple CDCL SAT Solver in `Rust`.  
 This code is really inspired by [no522's SAT Solver](https://github.com/not522/CompetitiveProgramming/blob/master/include/math/sat.hpp).  
