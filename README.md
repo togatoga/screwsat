@@ -4,7 +4,7 @@
 
 A very simple CDCL(Conflict-Driven-Clause-Learning) SAT Solver in `Rust`. The line of `solver` is around `300` lines.  
 I wrote it very simple to help people(including me) understating the inside of SAT Solver.  
-The performance of `screwsat` isn't good enough. You can easily understand the inside of SAT Solver(I hope).
+The performance of `screwsat` isn't as good as other mordern sat solvers. You can easily understand the inside of SAT Solver(I hope).
 
 ## How to use
 
