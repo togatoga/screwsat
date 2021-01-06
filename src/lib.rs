@@ -7,7 +7,7 @@ pub mod solver {
 
     pub type Var = usize;
     pub type Lit = (Var, bool); //(0, true) means x0 and (0, false) means not x0.
-    #[derive(PartialEq)]
+    #[derive(PartialEq, Debug)]
     pub enum Status {
         Sat,
         Unsat,
@@ -279,6 +279,7 @@ pub mod util {
     use std::io::BufRead;
 
     // CnfData is parsed form a input file
+    #[derive(Debug)]
     pub struct CnfData {
         // the number of variable
         pub var_num: Option<usize>,
