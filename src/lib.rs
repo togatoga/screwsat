@@ -301,7 +301,7 @@ pub mod util {
         let mut var_num = None;
         let mut cla_num = None;
         let mut clauses = vec![];
-        for (num, line) in reader.lines().enumerate() {
+        for line in reader.lines() {
             let line = line?;
             let line = line.trim();
 
