@@ -69,14 +69,14 @@ fn main() {
     {
         // Create a default Solver struct
         let mut solver = Solver::default();
-        // A problem is (x1 v ¬x5 v x4) ^ (¬x1 v x5 v x3 v x4)　^ (¬x3 v x4)
+        // A problem is (x1 v ¬x5 v x4) ∧ (¬x1 v x5 v x3 v x4) ∧ (x3 v x4)
         let clauses = vec![
             // (x1 v ¬x5 v x4)
             vec![(0, true), (4, false), (3, true)],
             // (¬x1 v x5 v x3 v x4)
             vec![(0, false), (4, true), (2, true), (3, true)],
-            // (¬x3 v x4)
-            vec![(2, false), (3, false)],
+            // (x3 v x4)
+            vec![(2, true), (3, true)],
         ];
         // Add clauses to solver
         clauses
@@ -86,6 +86,13 @@ fn main() {
         let status = solver.solve(None);
         // Sat: A problem is SATISFIABLE.
         println!("{:?}", status);
+        // print the assignments satisfy a given problem.
+        solver
+            .assigns
+            .iter()
+            .enumerate()
+            .for_each(|(var, assign)| print!("x{} = {} ", var + 1, assign));
+        println!("");
     }
 
     {
@@ -113,7 +120,6 @@ fn main() {
         let status = solver.solve(None);
         // Unsat: A problem is UNSATISFIABLE
         println!("{:?}", status);
-     
     }
 
     {
@@ -122,7 +128,9 @@ fn main() {
         let cnf = util::parse_cnf("examples/hard.cnf").unwrap();
         let mut solver = Solver::default();
         let clauses = cnf.clauses;
-        clauses.into_iter().for_each(|clause| solver.add_clause(&clause));
+        clauses
+            .into_iter()
+            .for_each(|clause| solver.add_clause(&clause));
         // 5 sec
         let status = solver.solve(Some(std::time::Duration::from_secs(5)));
         // Indeterminate
