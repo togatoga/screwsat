@@ -2,18 +2,21 @@
 mod tests {
     use screwsat::solver::{Solver, Status};
     use screwsat::util;
-    use std::fs::{self};
-
+    use walkdir::WalkDir;
     fn test_all_files(which: &str) {
         let expected = if which == "sat" {
             Status::Sat
         } else {
             Status::Unsat
         };
-        let entries = fs::read_dir(format!("cnf/{}/", which)).unwrap();
-        entries.for_each(|entry| {
-            let p = entry.unwrap().path();
-            let path_str = p.to_str().unwrap();
+        let entries = WalkDir::new(format!("cnf/{}/", which));
+        for entry in entries
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .filter(|e| !e.file_type().is_dir())
+        {
+            let path_str = entry.path().to_str().unwrap();
+
             if path_str.ends_with(".cnf") {
                 //parse cnf file
                 let cnf = util::parse_cnf(path_str).unwrap();
@@ -21,7 +24,15 @@ mod tests {
                 cnf.clauses
                     .iter()
                     .for_each(|clause| solver.add_clause(clause));
-                let status = solver.solve(None);
+
+                eprintln!("Solving... {}", path_str);
+                // Time limit is 3 sec
+                let status = solver.solve(Some(1000));
+                //Time out
+                if status == Status::Indeterminate {
+                    eprintln!("Skip!!(TIME LIMIT EXCEEDED): {}", path_str);
+                    continue;
+                }
                 if status != expected {
                     eprintln!(
                         "cnf: {}, Result: {:?} Expected: {:?}",
@@ -30,7 +41,7 @@ mod tests {
                     assert!(false);
                 }
             }
-        });
+        }
     }
     #[test]
     fn test_solve() {

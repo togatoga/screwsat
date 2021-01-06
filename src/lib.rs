@@ -303,6 +303,8 @@ pub mod util {
         let mut clauses = vec![];
         for (num, line) in reader.lines().enumerate() {
             let line = line?;
+            let line = line.trim();
+
             if line.starts_with('c') {
                 //comment
                 continue;
@@ -323,14 +325,14 @@ pub mod util {
             }
 
             let values: Vec<_> = values
-                .iter()
-                .map(|x| x.parse::<i32>().unwrap())
+                .into_iter()
+                .filter_map(|x| x.parse::<i32>().ok())
                 .take_while(|x| *x != 0)
                 .collect();
 
             if values.is_empty() {
-                println!("Invalid Line {} : {}", num, line);
-                std::process::exit(1);
+                // skip an empty line
+                continue;
             }
             let clause: Vec<Lit> = values
                 .iter()

@@ -20,3 +20,6 @@ path="src/lib.rs"
 
 [[bin]]
 name="screwsat"
+
+[dev-dependencies]
+walkdir="2"
