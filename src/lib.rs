@@ -4,20 +4,20 @@ pub mod solver {
         time::{Duration, Instant},
         vec,
     };
-    // A boolean variable
+    /// A boolean variable
     pub type Var = usize;
-    // A literal is either a variable or a negation of a variable.
-    // (0, true) means x0 and (0, false) means ¬x0.
+    /// A literal is either a variable or a negation of a variable.
+    /// (0, true) means x0 and (0, false) means ¬x0.
     pub type Lit = (Var, bool);
 
     #[derive(PartialEq, Debug)]
-    // The status of `solve`
+    /// The status of a problem that solver solved.
+    /// - `Sat` a solver found that a given problem is SATISFIABLE.
+    /// - `Unsat` a solver found that a given problem is UNSATISFIABLE.
+    /// - `Indeterminate` a solver stopped searching.
     pub enum Status {
-        // - `Sat` a solver found that a given problem is SATISFIABLE.
         Sat,
-        // - `Unsat` a solver found that a given problem is UNSATISFIABLE.
         Unsat,
-        // - `Indeterminate` a solver stopped searching.
         Indeterminate,
     }
 
