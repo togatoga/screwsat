@@ -4,17 +4,25 @@ pub mod solver {
         time::{Duration, Instant},
         vec,
     };
-
+    // A boolean variable
     pub type Var = usize;
-    pub type Lit = (Var, bool); //(0, true) means x0 and (0, false) means not x0.
+    // A literal is either a variable or a negation of a variable.
+    // (0, true) means x0 and (0, false) means ¬x0.
+    pub type Lit = (Var, bool);
+
     #[derive(PartialEq, Debug)]
+    // The status of `solve`
     pub enum Status {
+        // - `Sat` a solver found that a given problem is SATISFIABLE.
         Sat,
+        // - `Unsat` a solver found that a given problem is UNSATISFIABLE.
         Unsat,
+        // - `Indeterminate` a solver stopped searching.
         Indeterminate,
     }
 
     #[derive(Debug, Default)]
+    // A SAT Solver
     pub struct Solver {
         // the number of variables
         n: usize,
@@ -46,6 +54,8 @@ pub mod solver {
             };
             self.que.push_back(var);
         }
+
+        // Create a new space for one variable.
         pub fn new_var(&mut self) {
             self.n += 1;
             self.assigns.push(false);
@@ -63,9 +73,10 @@ pub mod solver {
             }
             self.clauses.push(clause.to_vec());
         }
-
         /// Add a new clause to `clauses` and watch a clause.
         /// If a variable is greater than the size of array, grow it.
+        /// # Arguments
+        /// * `clause` - a clause has one or some literal variables
         pub fn add_clause(&mut self, clause: &[Lit]) {
             if clause.len() == 1 {
                 self.enqueue(clause[0].0, clause[0].1, None);
@@ -207,7 +218,11 @@ pub mod solver {
                 self.add_clause_unchecked(&learnt_clause);
             }
         }
-
+        /// Create a new `Solver` struct
+        ///
+        /// # Arguments
+        /// * `n` - The number of variable
+        /// * `clauses` - All clauses that solver solves
         pub fn new(n: usize, clauses: &[Vec<Lit>]) -> Solver {
             let mut solver = Solver {
                 n,
@@ -228,10 +243,15 @@ pub mod solver {
             }
             solver
         }
-
+        /// Reserve the space of a clause database
+        /// # Arguments
+        /// * `cla_num` - The number of clause
         pub fn reserve_clause(&mut self, cla_num: usize) {
             self.clauses.reserve(cla_num);
         }
+        // Reserve the space of variables
+        /// # Arguments
+        /// * `var_num` - The number of variable
         pub fn reserve_variable(&mut self, var_num: usize) {
             self.que.reserve(var_num);
             self.clauses.reserve(var_num);
@@ -239,10 +259,10 @@ pub mod solver {
             self.level.reserve(var_num);
             self.assigns.reserve(var_num);
         }
+
         /// Solve a problem and return a enum `Status`.
-        /// - `Sat` found that a given problem is SATISFIABLE.
-        /// - `Unsat` found that a given problem is UNSATISFIABLE.
-        /// - `Indeterminate` solver stopped searching.
+        /// # Arguments
+        /// * `msec` - The time limitation to search(millisecond)
         pub fn solve(&mut self, msec: Option<u64>) -> Status {
             let start = Instant::now();
             loop {
@@ -294,16 +314,18 @@ pub mod util {
         pub var_num: Option<usize>,
         // the number of clause
         pub cla_num: Option<usize>,
+        // all problem clauses
         pub clauses: Vec<Vec<Lit>>,
     }
-
-    // Parse DIMACAS cnf file
-    // c Here is a comment.
-    // c SATISFIABLE
-    // p cnf 5 3
-    // 1 -5 4 0
-    // -1 5 3 4 0
-    // -3 -4 0
+    /// Parse a DIMACAS cnf file
+    /// # Arguments
+    /// * `input_file` - A path of an input file name
+    /// c Here is a comment.
+    /// c SATISFIABLE
+    /// p cnf 5 3
+    /// 1 -5 4 0
+    /// -1 5 3 4 0
+    /// -3 -4 0
     pub fn parse_cnf(input_file: &str) -> std::io::Result<CnfData> {
         let file = std::fs::File::open(input_file)?;
         let reader = std::io::BufReader::new(file);
