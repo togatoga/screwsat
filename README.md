@@ -4,11 +4,12 @@
 
 A very simple CDCL(Conflict-Driven-Clause-Learning) SAT Solver in `Rust`. The line of `solver` is around `300` lines.  
 I wrote it very simple to help people(including me) understating the inside of SAT Solver.  
-The performance of `screwsat` isn't as good as other mordern sat solvers. You can easily understand the inside of SAT Solver(I hope).
+The performance of `screwsat` isn't as good as other modern sat solvers.  
+But you can grasp some important points of SAT Solver from `screwsat`(I hope).  
 
 ## How to use
 
-`screwsat` can be used as a library and a command line tool. 
+`screwsat` can be used as a library and a command line tool
 
 ## Command
 
@@ -18,7 +19,7 @@ The performance of `screwsat` isn't as good as other mordern sat solvers. You ca
 % cargo install --locked screwsat
 ```
 
-### Usage
+### Usage(cmd)
 
 ```bash
 % screwsat --help
@@ -58,7 +59,7 @@ OR
 
 Copy `src/lib.rs` and Paste it.(Competitive Programming Style)
 
-### Usage
+### Usage(lib)
 
 ```rust
 use std::vec;
@@ -141,7 +142,4 @@ fn main() {
 
 ### Appreciation
 
-This code is really inspired by his simple good code [not522's SAT Solver](https://github.com/not522/CompetitiveProgramming/blob/master/include/math/sat.hpp).
-### Other
-
-Make a merge request and give me start makes me motivated.
+This code is really inspired by his simple good code [not522's SAT Solver](https://github.com/not522/CompetitiveProgramming/blob/master/include/math/sat.hpp)
