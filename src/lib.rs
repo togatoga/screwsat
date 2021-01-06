@@ -16,14 +16,22 @@ pub mod solver {
 
     #[derive(Debug, Default)]
     pub struct Solver {
-        n: usize,                           // the number of variables
-        pub assigns: Vec<bool>,             // assignments for each varialbes
-        clauses: Vec<Vec<Lit>>,             // all clauses(original + learnt)
-        watchers: HashMap<Lit, Vec<usize>>, // clauses that may be conflicted or propagated if a `lit` is false.
-        reason: Vec<Option<usize>>, // a clause index represents that a variable is forced to be assigned.
-        level: Vec<usize>,          // decision level(0: unassigned, 1: minimum level)
-        que: VecDeque<Var>,         // assigned variables
-        head: usize,                // the head of que's unchecked front
+        // the number of variables
+        n: usize,
+        // assignments for each variable
+        pub assigns: Vec<bool>,
+        // all clauses(original + learnt)
+        clauses: Vec<Vec<Lit>>,
+        // clauses that may be conflicted or propagated if a `lit` is false.
+        watchers: HashMap<Lit, Vec<usize>>,
+        // a clause index represents that a variable is forced to be assigned.
+        reason: Vec<Option<usize>>,
+        // decision level(0: unassigned, 1: minimum level)
+        level: Vec<usize>,
+        // assigned variables
+        que: VecDeque<Var>,
+        //the head index of `que` points unprocessed elements
+        head: usize,
     }
 
     impl Solver {
@@ -231,9 +239,10 @@ pub mod solver {
             self.level.reserve(var_num);
             self.assigns.reserve(var_num);
         }
-        /// Solve a problem and return
-        /// `true` if solver finds a SATISFIABLE assignments
-        /// `false` if solver finds a given problem is UNSATISFIABLE or reach the time limit
+        /// Solve a problem and return a enum `Status`.
+        /// - `Sat` found that a given problem is SATISFIABLE.
+        /// - `Unsat` found that a given problem is UNSATISFIABLE.
+        /// - `Indeterminate` solver stopped searching.
         pub fn solve(&mut self, msec: Option<u64>) -> Status {
             let start = Instant::now();
             loop {
