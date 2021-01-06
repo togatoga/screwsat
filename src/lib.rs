@@ -262,13 +262,14 @@ pub mod solver {
 
         /// Solve a problem and return a enum `Status`.
         /// # Arguments
-        /// * `msec` - The time limitation to search(millisecond)
-        pub fn solve(&mut self, msec: Option<u64>) -> Status {
+        /// * `time_limit` - The time limitation for searching.
+        /// Exceeding the time limit returns `Indeterminate`
+        pub fn solve(&mut self, time_limit: Option<Duration>) -> Status {
             let start = Instant::now();
             loop {
-                if let Some(msec) = msec {
-                    // reach the time limit
-                    if start.elapsed() > Duration::from_millis(msec) {
+                if let Some(time_limit) = time_limit {
+                    if start.elapsed() > time_limit {
+                        // exceed the time limit
                         return Status::Indeterminate;
                     }
                 }

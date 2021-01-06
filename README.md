@@ -7,7 +7,7 @@ This code is really inspired by [not522's SAT Solver](https://github.com/not522/
 # How to use
 `screwsat` can be used as a library and a command line tool. 
 
-## As a cmd line tool
+## Command
 ### Install
 ```
 % cargo install --locked screwsat
@@ -40,4 +40,19 @@ SAT
 
 ```
 
-## As a library
+## Library
+
+You can add `screwsat` to `Cargo.toml`.
+```
+screwsat="1.0"
+```
+
+OR
+
+Copy `src/lib.rs` and Paste it.(Competitive Programming Style)
+
+### Example
+```
+
+
+```
