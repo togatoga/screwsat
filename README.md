@@ -7,6 +7,11 @@ I wrote it very simple to help people(including me) understating the inside of S
 The performance of `screwsat` isn't as good as other modern sat solvers.  
 But you can grasp some important points of SAT Solver from `screwsat`(I hope).  
 
+
+`screwsat` is written in only one file and `std` libraries. You can use it for competitive programming problems.  
+Accepted by `screwsat` : [AtCoder Beginner Contest 187 F - Close Group](https://atcoder.jp/contests/abc187/submissions/19235301)
+
+
 ## How to use
 
 `screwsat` can be used as a library and a command line tool
@@ -88,6 +93,7 @@ fn main() {
         // Sat: A problem is SATISFIABLE.
         println!("{:?}", status);
         // print the assignments satisfy a given problem.
+        // x1 = false x2 = false x3 = false x4 = true x5 = false
         solver
             .assigns
             .iter()

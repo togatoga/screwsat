@@ -24,6 +24,7 @@ fn main() {
         // Sat: A problem is SATISFIABLE.
         println!("{:?}", status);
         // print the assignments satisfy a given problem.
+        // x1 = false x2 = false x3 = false x4 = true x5 = false
         solver
             .assigns
             .iter()
