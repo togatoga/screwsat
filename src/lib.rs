@@ -1,4 +1,4 @@
-pub mod screwsat {
+pub mod solver {
     use std::{
         collections::{HashMap, HashSet, VecDeque},
         time::{Duration, Instant},
@@ -270,5 +270,84 @@ pub mod screwsat {
                 }
             }
         }
+    }
+}
+
+// This mod contains utility functions
+pub mod util {
+    use super::solver::{Lit, Var};
+    use std::io::BufRead;
+
+    // CnfData is parsed form a input file
+    pub struct CnfData {
+        // the number of variable
+        pub var_num: Option<usize>,
+        // the number of clause
+        pub cla_num: Option<usize>,
+        pub clauses: Vec<Vec<Lit>>,
+    }
+
+    // Parse DIMACAS cnf file
+    // c Here is a comment.
+    // c SATISFIABLE
+    // p cnf 5 3
+    // 1 -5 4 0
+    // -1 5 3 4 0
+    // -3 -4 0
+    pub fn parse_cnf(input_file: &str) -> std::io::Result<CnfData> {
+        let file = std::fs::File::open(input_file)?;
+        let reader = std::io::BufReader::new(file);
+        let mut var_num = None;
+        let mut cla_num = None;
+        let mut clauses = vec![];
+        for (num, line) in reader.lines().enumerate() {
+            let line = line?;
+            if line.starts_with('c') {
+                //comment
+                continue;
+            }
+            let values: Vec<&str> = line.split_whitespace().collect();
+            if values.is_empty() {
+                continue;
+            }
+            if values[0] == "p" {
+                //p cnf v_num c_num
+                if let Some(v) = values.get(2) {
+                    var_num = Some(v.parse::<usize>().unwrap());
+                };
+                if let Some(v) = values.get(3) {
+                    cla_num = Some(v.parse::<usize>().unwrap());
+                }
+                continue;
+            }
+
+            let values: Vec<_> = values
+                .iter()
+                .map(|x| x.parse::<i32>().unwrap())
+                .take_while(|x| *x != 0)
+                .collect();
+
+            if values.is_empty() {
+                println!("Invalid Line {} : {}", num, line);
+                std::process::exit(1);
+            }
+            let clause: Vec<Lit> = values
+                .iter()
+                .map(|&x| {
+                    let d = x.abs() as Var;
+                    if x > 0 {
+                        (d - 1, true)
+                    } else {
+                        (d - 1, false)
+                    }
+                })
+                .collect();
+            clauses.push(clause);
+        }
+        Ok(CnfData {
+            var_num,
+            cla_num,
+            clauses,
+        })
     }
 }
