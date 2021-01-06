@@ -50,7 +50,6 @@ fn main() {
         let status = solver.solve(None);
         // Unsat: A problem is UNSATISFIABLE
         println!("{:?}", status);
-     
     }
 
     {
@@ -59,7 +58,9 @@ fn main() {
         let cnf = util::parse_cnf("examples/hard.cnf").unwrap();
         let mut solver = Solver::default();
         let clauses = cnf.clauses;
-        clauses.into_iter().for_each(|clause| solver.add_clause(&clause));
+        clauses
+            .into_iter()
+            .for_each(|clause| solver.add_clause(&clause));
         // 5 sec
         let status = solver.solve(Some(std::time::Duration::from_secs(5)));
         // Indeterminate

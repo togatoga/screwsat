@@ -27,7 +27,7 @@ mod tests {
 
                 eprintln!("Solving... {}", path_str);
                 // Time limit is 3 sec
-                let status = solver.solve(Some(3000));
+                let status = solver.solve(Some(std::time::Duration::from_secs(3)));
                 //Time out
                 if status == Status::Indeterminate {
                     eprintln!("Skip!!(TIME LIMIT EXCEEDED): {}", path_str);
