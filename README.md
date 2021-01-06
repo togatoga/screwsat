@@ -1,20 +1,26 @@
 # screwsat
+
 [![Crates.io](https://img.shields.io/crates/v/screwsat)](https://crates.io/crates/screwsat)
 
-A very simple CDCL SAT Solver in `Rust`.  
-This code is really inspired by [not522's SAT Solver](https://github.com/not522/CompetitiveProgramming/blob/master/include/math/sat.hpp).  
+A very simple CDCL(Conflict-Driven-Clause-Learning) SAT Solver in `Rust`. The line of `solver` is around `300` lines.  
+I wrote it very simple to help people(including me) understating the inside of SAT Solver.  
+The performance of `screwsat` isn't good enough. You can easily understand the inside of SAT Solver(I hope).
 
-# How to use
+## How to use
+
 `screwsat` can be used as a library and a command line tool. 
 
 ## Command
+
 ### Install
-```
+
+```bash
 % cargo install --locked screwsat
 ```
 
 ### Usage
-```
+
+```bash
 % screwsat --help
 USAGE: screwsat [options] <input-file> [output-file]
 
@@ -43,7 +49,8 @@ SAT
 ## Library
 
 You can add `screwsat` to `Cargo.toml`.
-```
+
+```toml
 screwsat="1.0"
 ```
 
@@ -52,6 +59,7 @@ OR
 Copy `src/lib.rs` and Paste it.(Competitive Programming Style)
 
 ### Usage
+
 ```rust
 use std::vec;
 
@@ -122,3 +130,10 @@ fn main() {
     }
 }
 ```
+
+### Appreciation
+
+This code is really inspired by his simple good code [not522's SAT Solver](https://github.com/not522/CompetitiveProgramming/blob/master/include/math/sat.hpp).
+### Other
+
+Make a merge request and give me start makes me motivated.
