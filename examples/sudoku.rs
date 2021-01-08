@@ -105,22 +105,34 @@ fn clauses_from_sudoku(board: &[Vec<u32>]) -> Vec<Vec<Lit>> {
     clauses
 }
 
-fn print_sudoku(board: &[Vec<u32>]) {
-    let mut max_line = board.len();
+fn print_sudoku(board: &[Vec<u32>], colored: &[Vec<u32>]) {
     let n = board.len();
     let mut results = vec![];
+    println!("Sudoku {} x {}", n, n);
     for y in 0..n {
-        let line: String = board[y].iter().map(|v| v.to_string() + " ").collect();
-        max_line = std::cmp::max(max_line, line.len());
+        let line: String = board[y]
+            .iter()
+            .enumerate()
+            .map(|(x, v)| {
+                if colored[y][x] > 0 {
+                    //color red
+                    let color = 1;
+                    format!(" \x1b[{}m{}\x1b[m ", 30 + color, v)
+                } else {
+                    format!(" {} ", v)
+                }
+            })
+            .collect();
         results.push(line);
     }
     // print results
-    let line: String = (0..max_line).map(|_| "-").collect();
+    let line: String = (0..2 * n + 10).map(|_| "-").collect();
+    println!("{}", line);
     results.iter().for_each(|line| {
         println!("{}", line);
     });
-    let line: String = (0..max_line).map(|_| "-").collect();
     println!("{}", line);
+    println!();
 }
 
 fn board_from_assign(n: usize, assigns: &[bool]) -> Vec<Vec<u32>> {
@@ -140,33 +152,75 @@ fn board_from_assign(n: usize, assigns: &[bool]) -> Vec<Vec<u32>> {
 }
 
 fn main() {
-    let mut solver = Solver::default();
-    let sudoku_9 = [
-        vec![0, 0, 5, 3, 0, 0, 0, 0, 0],
-        vec![8, 0, 0, 0, 0, 0, 0, 2, 0],
-        vec![0, 7, 0, 0, 1, 0, 5, 0, 0],
-        vec![4, 0, 0, 0, 0, 5, 3, 0, 0],
-        vec![0, 1, 0, 0, 7, 0, 0, 0, 6],
-        vec![0, 0, 3, 2, 0, 0, 0, 8, 0],
-        vec![0, 6, 0, 5, 0, 0, 0, 0, 9],
-        vec![0, 0, 4, 0, 0, 0, 0, 3, 0],
-        vec![0, 0, 0, 0, 0, 9, 7, 0, 0],
-    ];
-    print_sudoku(&sudoku_9);
-    let clauses = clauses_from_sudoku(&sudoku_9);
-    clauses.iter().for_each(|clause| solver.add_clause(clause));
-    let status = solver.solve(None);
-    match status {
-        Status::Sat => {
-            println!("SAT");
-            let result = board_from_assign(sudoku_9.len(), &solver.assigns);
-            print_sudoku(&result);
+    {
+        let mut solver = Solver::default();
+        let sudoku_9 = [
+            vec![0, 0, 5, 3, 0, 0, 0, 0, 0],
+            vec![8, 0, 0, 0, 0, 0, 0, 2, 0],
+            vec![0, 7, 0, 0, 1, 0, 5, 0, 0],
+            vec![4, 0, 0, 0, 0, 5, 3, 0, 0],
+            vec![0, 1, 0, 0, 7, 0, 0, 0, 6],
+            vec![0, 0, 3, 2, 0, 0, 0, 8, 0],
+            vec![0, 6, 0, 5, 0, 0, 0, 0, 9],
+            vec![0, 0, 4, 0, 0, 0, 0, 3, 0],
+            vec![0, 0, 0, 0, 0, 9, 7, 0, 0],
+        ];
+        print_sudoku(&sudoku_9, &sudoku_9);
+        let clauses = clauses_from_sudoku(&sudoku_9);
+        clauses.iter().for_each(|clause| solver.add_clause(clause));
+        let status = solver.solve(None);
+        match status {
+            Status::Sat => {
+                println!("SAT");
+                let result = board_from_assign(sudoku_9.len(), &solver.assigns);
+                print_sudoku(&result, &sudoku_9);
+            }
+            Status::Unsat => {
+                println!("UNSAT");
+            }
+            _ => {
+                println!("INDETERMINATE");
+            }
         }
-        Status::Unsat => {
-            println!("UNSAT");
-        }
-        _ => {
-            println!("INDETERMINATE");
+    }
+
+    {
+        let mut solver = Solver::default();
+        let sudoku_16 = [
+            vec![0, 15, 0, 1, 0, 2, 10, 14, 12, 0, 0, 0, 0, 0, 0, 0],
+            vec![0, 6, 3, 16, 12, 0, 8, 4, 14, 15, 1, 0, 2, 0, 0, 0],
+            vec![14, 0, 9, 7, 11, 3, 15, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            vec![4, 13, 2, 12, 0, 0, 0, 0, 6, 0, 0, 0, 0, 15, 0, 0],
+            vec![0, 0, 0, 0, 14, 1, 11, 7, 3, 5, 10, 0, 0, 8, 0, 12],
+            vec![3, 16, 0, 0, 2, 4, 0, 0, 0, 14, 7, 13, 0, 0, 5, 15],
+            vec![11, 0, 5, 0, 0, 0, 0, 0, 0, 9, 4, 0, 0, 6, 0, 0],
+            vec![0, 0, 0, 0, 13, 0, 16, 5, 15, 0, 0, 12, 0, 0, 0, 0],
+            vec![0, 0, 0, 0, 9, 0, 1, 12, 0, 8, 3, 10, 11, 0, 15, 0],
+            vec![2, 12, 0, 11, 0, 0, 14, 3, 5, 4, 0, 0, 0, 0, 9, 0],
+            vec![6, 3, 0, 4, 0, 0, 13, 0, 0, 11, 9, 1, 0, 12, 16, 2],
+            vec![0, 0, 10, 9, 0, 0, 0, 0, 0, 0, 12, 0, 8, 0, 6, 7],
+            vec![12, 8, 0, 0, 16, 0, 0, 10, 0, 13, 0, 0, 0, 5, 0, 0],
+            vec![5, 0, 0, 0, 3, 0, 4, 6, 0, 1, 15, 0, 0, 0, 0, 0],
+            vec![0, 9, 1, 6, 0, 14, 0, 11, 0, 0, 2, 0, 0, 0, 10, 8],
+            vec![0, 14, 0, 0, 0, 13, 9, 0, 4, 12, 11, 8, 0, 0, 2, 0],
+        ];
+
+        print_sudoku(&sudoku_16, &sudoku_16);
+        let clauses = clauses_from_sudoku(&sudoku_16);
+        clauses.iter().for_each(|clause| solver.add_clause(clause));
+        let status = solver.solve(None);
+        match status {
+            Status::Sat => {
+                println!("SAT");
+                let result = board_from_assign(sudoku_16.len(), &solver.assigns);
+                print_sudoku(&result, &sudoku_16);
+            }
+            Status::Unsat => {
+                println!("UNSAT");
+            }
+            _ => {
+                println!("INDETERMINATE");
+            }
         }
     }
 }
