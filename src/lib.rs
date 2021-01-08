@@ -1,4 +1,5 @@
 pub mod solver {
+
     use std::{
         collections::{HashMap, HashSet, VecDeque},
         time::{Duration, Instant},
@@ -9,6 +10,14 @@ pub mod solver {
     /// A literal is either a variable or a negation of a variable.
     /// (0, true) means x0 and (0, false) means ¬x0.
     pub type Lit = (Var, bool);
+    pub trait Negation {
+        fn neg(self) -> Self;
+    }
+    impl Negation for Lit {
+        fn neg(self) -> Self {
+            (self.0, !self.1)
+        }
+    }
 
     #[derive(PartialEq, Debug)]
     /// The status of a problem that solver solved.
