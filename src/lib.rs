@@ -1,4 +1,5 @@
 pub mod solver {
+
     use std::{
         collections::{HashMap, HashSet, VecDeque},
         time::{Duration, Instant},
@@ -9,6 +10,14 @@ pub mod solver {
     /// A literal is either a variable or a negation of a variable.
     /// (0, true) means x0 and (0, false) means ¬x0.
     pub type Lit = (Var, bool);
+    pub trait Negation {
+        fn neg(self) -> Self;
+    }
+    impl Negation for Lit {
+        fn neg(self) -> Self {
+            (self.0, !self.1)
+        }
+    }
 
     #[derive(PartialEq, Debug)]
     /// The status of a problem that solver solved.
@@ -79,7 +88,11 @@ pub mod solver {
         /// * `clause` - a clause has one or some literal variables
         pub fn add_clause(&mut self, clause: &[Lit]) {
             if clause.len() == 1 {
-                self.enqueue(clause[0].0, clause[0].1, None);
+                let c = clause[0];
+                while c.0 >= self.assigns.len() {
+                    self.new_var();
+                }
+                self.enqueue(c.0, c.1, None);
                 return;
             }
             let clause_idx = self.clauses.len();
