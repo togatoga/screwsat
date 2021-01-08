@@ -88,7 +88,11 @@ pub mod solver {
         /// * `clause` - a clause has one or some literal variables
         pub fn add_clause(&mut self, clause: &[Lit]) {
             if clause.len() == 1 {
-                self.enqueue(clause[0].0, clause[0].1, None);
+                let c = clause[0];
+                while c.0 >= self.assigns.len() {
+                    self.new_var();
+                }
+                self.enqueue(c.0, c.1, None);
                 return;
             }
             let clause_idx = self.clauses.len();
