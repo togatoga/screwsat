@@ -116,10 +116,9 @@ fn print_sudoku(board: &[Vec<u32>], colored: &[Vec<u32>]) {
             .map(|(x, v)| {
                 if colored[y][x] > 0 {
                     //color red
-                    let color = 1;
-                    format!(" \x1b[{}m{}\x1b[m ", 30 + color, v)
+                    format!("\x1b[{}m{:02}\x1b[m ", 31, v)
                 } else {
-                    format!(" {} ", v)
+                    format!("{:02} ", v)
                 }
             })
             .collect();
