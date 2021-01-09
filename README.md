@@ -12,9 +12,15 @@ But you can grasp some important points of SAT Solver from `screwsat`(I hope).
 Accepted by `screwsat` : [AtCoder Beginner Contest 187 F - Close Group](https://atcoder.jp/contests/abc187/submissions/19235301)
 
 
+When you run the test `cargo test`, you need to pull all SAT problems for testing (`tests/`) in this repository by [`git-lfs`](https://git-lfs.github.com/).  
+
+```
+% git lfs pull
+```
+
 ## How to use
 
-`screwsat` can be used as a library and a command line tool
+`screwsat` can be used as a library and a command line tool.
 
 ## Command
 
