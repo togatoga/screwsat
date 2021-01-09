@@ -128,6 +128,10 @@ pub mod solver {
                                 // this variable hasn't been decided yet
                                 self.clauses[cr].swap(c, 0);
                                 cnt += 1;
+                                if cnt >= 2 {
+                                    // this clause won't happan a conflict or propagation.
+                                    continue 'next_clause;
+                                }
                             } else if self.assigns[v] == sign {
                                 // this clause is already satisfied
                                 self.clauses[cr].swap(c, 0);
@@ -171,12 +175,11 @@ pub mod solver {
             loop {
                 for p in self.clauses[confl].iter() {
                     let (var, _) = *p;
+                    debug_assert!(self.level[var] != 0);
                     if skip && var == self.que[que_tail] {
                         continue;
                     }
-                    if self.level[var] == 0 {
-                        continue;
-                    }
+
                     // already checked
                     if !checked_vars.insert(var) {
                         continue;
@@ -208,9 +211,6 @@ pub mod solver {
             }
             let p = self.que[que_tail];
             learnt_clause.push((p, !self.assigns[p]));
-            if learnt_clause.len() == 1 {
-                backtrack_level = 1;
-            }
 
             // Cancel decisions until the level is less than equal to the backtrack level
             while let Some(p) = self.que.back() {
@@ -221,8 +221,10 @@ pub mod solver {
                     break;
                 }
             }
+
             // propagate it by a new learnt clause
             if learnt_clause.len() == 1 {
+                debug_assert_eq!(backtrack_level, 1);
                 self.enqueue(p, !self.assigns[p], None);
                 self.head = self.que.len() - 1;
             } else {
@@ -296,16 +298,11 @@ pub mod solver {
                 } else {
                     // No Conflict
                     // Select a decision variable that isn't decided yet
-                    let mut p = None;
-                    for v in 0..self.n {
-                        if self.level[v] == 0 {
-                            p = Some(v);
-                            break;
-                        }
-                    }
-                    if let Some(p) = p {
-                        self.enqueue(p, self.assigns[p], None);
-                        self.level[p] += 1;
+                    let nxt_var = self.level.iter().position(|level| *level == 0);
+
+                    if let Some(nxt_var) = nxt_var {
+                        self.enqueue(nxt_var, self.assigns[nxt_var], None);
+                        self.level[nxt_var] += 1;
                     } else {
                         // all variables are selected. which means that a formula is satisfied
                         return Status::Sat;
