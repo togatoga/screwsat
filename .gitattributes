@@ -1,1 +1,2 @@
-*.cnf filter=lfs diff=lfs merge=lfs -text
+cnf/sat/*.cnf filter=lfs diff=lfs merge=lfs -text
+cnf/unsat/*.cnf filter=lfs diff=lfs merge=lfs -text
