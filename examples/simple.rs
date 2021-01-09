@@ -46,7 +46,7 @@ fn main() {
         // 1 2 -3 0
         // 1 3 0
         // -1 -2 3 0
-        let cnf = util::parse_cnf("cnf/unsat/unsat.cnf").unwrap();
+        let cnf = util::parse_cnf("examples/unsat.cnf").unwrap();
         // 3
         let variable_num = cnf.var_num.unwrap();
         // 5

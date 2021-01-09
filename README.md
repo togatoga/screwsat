@@ -11,8 +11,7 @@ But you can grasp some important points of SAT Solver from `screwsat`(I hope).
 `screwsat` is written in only one file and `std` libraries. You can use it for competitive programming problems.  
 Accepted by `screwsat` : [AtCoder Beginner Contest 187 F - Close Group](https://atcoder.jp/contests/abc187/submissions/19235301)
 
-
-When you run the test `cargo test`, you need to pull all SAT problems for testing (`tests/`) in this repository by [`git-lfs`](https://git-lfs.github.com/).  
+You need to pull all SAT problems under `cnf` directory that are stored by [`git-lfs`](https://git-lfs.github.com/) to run `cargo test`.
 
 ```
 % git lfs pull
@@ -36,7 +35,7 @@ When you run the test `cargo test`, you need to pull all SAT problems for testin
 % screwsat --help
 USAGE: screwsat [options] <input-file> [output-file]
 
-% cat cnf/sat/sat.cnf
+% cat examples/sat.cnf
 c Here is a comment.
 c SATISFIABLE
 p cnf 5 3
@@ -44,14 +43,14 @@ p cnf 5 3
 -1 5 3 4 0
 -3 -4 0
 
-% screwsat cnf/sat/sat.cnf
+% screwsat examples/sat.cnf
 s SATISFIABLE
 -1 -2 -3 -4 -5 0
 
 % screwsat cnf/unsat/unsat.cnf
 s UNSATISFIABLE
 
-% screwsat cnf/sat/sat.cnf sat_result.txt
+% screwsat examples/sat.cnf sat_result.txt
 % cat sat_result.txt
 SAT
 -1 -2 -3 -4 -5 0
@@ -60,10 +59,10 @@ SAT
 
 ## Library
 
-You can add `screwsat` to `Cargo.toml`.
+You need to add `screwsat` to `Cargo.toml`.
 
 ```toml
-screwsat="1.0"
+screwsat="*"
 ```
 
 OR
@@ -121,7 +120,7 @@ fn main() {
         // 1 2 -3 0
         // 1 3 0
         // -1 -2 3 0
-        let cnf = util::parse_cnf("cnf/unsat/unsat.cnf").unwrap();
+        let cnf = util::parse_cnf("examples/unsat.cnf").unwrap();
         // 3
         let variable_num = cnf.var_num.unwrap();
         // 5
