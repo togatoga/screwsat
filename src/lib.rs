@@ -201,7 +201,7 @@ pub mod solver {
                             // NOTE
                             // I don't know how to handle this borrowing problem. Please help me.
                             // self.enqueue(var, sign, Some(cr));
-                            
+
                             self.assigns[var] = sign;
                             self.reason[var] = Some(cr);
                             self.level[var] = if let Some(last) = self.que.back() {
@@ -503,5 +503,37 @@ pub mod util {
             }
         }
         true
+    }
+    pub fn clauses_to_cnf(clauses: &[Vec<Lit>], output_file_name: &str) -> std::io::Result<()> {
+        use std::io::prelude::*;
+
+        let mut f = std::fs::File::create(output_file_name)?;
+        let mut var_num = 0;
+        clauses.iter().for_each(|clause| {
+            for c in clause.iter() {
+                var_num = std::cmp::max(var_num, c.0 + 1);
+            }
+        });
+        writeln!(f, "p cnf {} {}", var_num, clauses.len())?;
+        for clause in clauses.iter() {
+            let line = clause
+                .iter()
+                .enumerate()
+                .map(|(i, x)| {
+                    let v = if x.1 {
+                        format!("{}", x.0 + 1)
+                    } else {
+                        format!("-{}", x.0 + 1)
+                    };
+                    if i == clause.len() - 1 {
+                        format!("{} 0", v)
+                    } else {
+                        format!("{} ", v)
+                    }
+                })
+                .collect::<String>();
+            writeln!(f, "{}", line)?;
+        }
+        Ok(())
     }
 }
