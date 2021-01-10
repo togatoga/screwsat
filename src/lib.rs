@@ -54,6 +54,7 @@ pub mod solver {
     impl Solver {
         /// Enqueue a variable to assign a `value` to a boolean `assign`
         fn enqueue(&mut self, var: Var, assign: bool, reason: Option<usize>) {
+            debug_assert!(self.level[var] == 0);
             self.assigns[var] = assign;
             self.reason[var] = reason;
             self.level[var] = if let Some(last) = self.que.back() {
