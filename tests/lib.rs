@@ -1,8 +1,24 @@
 #[cfg(test)]
 mod tests {
-    use screwsat::solver::{Solver, Status};
+    use screwsat::solver::{Lit, Solver, Status};
     use screwsat::util;
     use walkdir::WalkDir;
+
+    fn model_checker(clauses: &[Vec<Lit>], assigns: &[bool]) -> bool {
+        for clause in clauses.iter() {
+            let mut satisfied = false;
+            for lit in clause {
+                if assigns[lit.0] == lit.1 {
+                    satisfied = true;
+                    break;
+                }
+            }
+            if !satisfied {
+                return false;
+            }
+        }
+        true
+    }
     fn test_all_files(which: &str) {
         let expected = if which == "sat" {
             Status::Sat
@@ -39,6 +55,15 @@ mod tests {
                         path_str, status, expected
                     );
                     assert!(false);
+                }
+                if status == Status::Sat {
+                    if !model_checker(&cnf.clauses, &solver.assigns) {
+                        eprintln!(
+                            "Assignments are wrong!! cnf: {}, Result: {:?} Expected: {:?}",
+                            path_str, status, expected
+                        );
+                        assert!(false);
+                    }
                 }
             }
         }
