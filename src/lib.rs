@@ -136,7 +136,7 @@ pub mod solver {
                 };
                 let false_p = p.neg();
                 debug_assert!(self.level[p.0] > 0);
-                
+
                 if let Some(watcher) = self.watchers.get_mut(&p) {
                     let mut idx = 0;
                     'next_clause: while idx < watcher.len() {
@@ -174,7 +174,7 @@ pub mod solver {
                             }
                         }
                         debug_assert_eq!(watcher[idx - 1], cr);
-                        
+
                         if self.level[first.0] > 0 {
                             debug_assert!(self.assigns[first.0] != first.1);
                             // CONFLICT
@@ -182,10 +182,6 @@ pub mod solver {
                             // clause[1] is a false
                             // clause[2..len] is a false
 
-                            //Debug
-                            for c in clause.iter() {
-                                assert!(self.level[c.0] > 0 && self.assigns[c.0] != c.1);
-                            }
                             self.head = self.que.len();
                             conflict = Some(cr);
                             break 'conflict;
@@ -310,7 +306,6 @@ pub mod solver {
                 self.enqueue(learnt_clause[0].0, learnt_clause[0].1, None);
                 self.head = self.que.len() - 1;
             } else {
-              
                 self.enqueue(
                     learnt_clause[0].0,
                     learnt_clause[0].1,
