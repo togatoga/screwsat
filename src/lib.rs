@@ -168,7 +168,6 @@ pub mod solver {
                                 watcher.pop();
 
                                 update_watchers.push_back((clause[1].neg(), cr));
-                                eprintln!("{:?}, {:?}", p, clause[1]);
                                 // NOTE
                                 // Don't increase `idx` because you replace and the idx element with the last one.
                                 idx -= 1;
@@ -202,7 +201,7 @@ pub mod solver {
                             // NOTE
                             // I don't know how to handle this borrowing problem. Please help me.
                             // self.enqueue(var, sign, Some(cr));
-
+                            
                             self.assigns[var] = sign;
                             self.reason[var] = Some(cr);
                             self.level[var] = if let Some(last) = self.que.back() {
@@ -236,10 +235,11 @@ pub mod solver {
             let mut same_level_cnt = 0;
             let mut skip = false;
             loop {
-                for p in self.clauses[confl].iter() {
+                for (i, p) in self.clauses[confl].iter().enumerate() {
                     let (var, _) = *p;
                     debug_assert!(self.level[var] > 0);
                     if skip && var == self.que[que_tail] {
+                        debug_assert!(i == 0);
                         continue;
                     }
 
@@ -310,12 +310,12 @@ pub mod solver {
                 self.enqueue(learnt_clause[0].0, learnt_clause[0].1, None);
                 self.head = self.que.len() - 1;
             } else {
-                // for i in 0..n {
-                //     for j in i + 1..n {
-                //         assert!(learnt_clause[i] != learnt_clause[j]);
-                //         assert!(learnt_clause[i] != learnt_clause[j].neg());
-                //     }
-                // }
+                for i in 0..n {
+                    for j in i + 1..n {
+                        assert!(learnt_clause[i] != learnt_clause[j]);
+                        assert!(learnt_clause[i] != learnt_clause[j].neg());
+                    }
+                }
                 self.enqueue(
                     learnt_clause[0].0,
                     learnt_clause[0].1,
