@@ -2,8 +2,13 @@
 
 [![Crates.io](https://img.shields.io/crates/v/screwsat)](https://crates.io/crates/screwsat)
 
-A very simple CDCL(Conflict-Driven-Clause-Learning) SAT Solver in `Rust`. The line of `solver` is around `300` lines.  
+A very simple CDCL(Conflict-Driven-Clause-Learning) SAT Solver in `Rust`. The total line of `solver` is around `400` lines.  
 I wrote it very simple to help people(including me) understating the inside of SAT Solver.  
+I have implemented the core SAT Solver algorithms and techinques in `screwsat`.  
+- CDCL(Conflict-Driven-Clause-Learning)
+- Back Jump
+- Two-Literal-Watching
+
 The performance of `screwsat` isn't as good as other modern sat solvers.  
 But you can grasp some important points of SAT Solver from `screwsat`(I hope).  
 
@@ -11,7 +16,7 @@ But you can grasp some important points of SAT Solver from `screwsat`(I hope).
 `screwsat` is written in only one file and `std` libraries. You can use it for competitive programming problems.  
 Accepted by `screwsat` : [AtCoder Beginner Contest 187 F - Close Group](https://atcoder.jp/contests/abc187/submissions/19235301)
 
-You need to pull all SAT problems under `cnf` directory that are stored by [`git-lfs`](https://git-lfs.github.com/) to run `cargo test`.
+You need to pull all SAT problems under the `cnf` directory that are stored by [`git-lfs`](https://git-lfs.github.com/) to run `cargo test`.
 
 ```
 % git lfs pull
@@ -154,3 +159,6 @@ fn main() {
 ### Appreciation
 
 This code is really inspired by his simple good code [not522's SAT Solver](https://github.com/not522/CompetitiveProgramming/blob/master/include/math/sat.hpp)
+
+### Contribution
+Contributions and feedbacks are welcome.(e.g. fix typo and tedious code and my English, report bugs/issues, **GIVE ME GITHUB STARS**)

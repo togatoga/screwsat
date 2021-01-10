@@ -54,6 +54,7 @@ pub mod solver {
     impl Solver {
         /// Enqueue a variable to assign a `value` to a boolean `assign`
         fn enqueue(&mut self, var: Var, assign: bool, reason: Option<usize>) {
+            debug_assert!(self.level[var] == 0);
             self.assigns[var] = assign;
             self.reason[var] = reason;
             self.level[var] = if let Some(last) = self.que.back() {
@@ -75,11 +76,17 @@ pub mod solver {
         /// This method is only for internal usage and almost same as `add_clause`
         /// But, this method doesn't grow the size of array.
         fn add_clause_unchecked(&mut self, clause: &[Lit]) {
-            assert!(clause.len() >= 2);
+            debug_assert!(clause.len() >= 2);
             let clause_idx = self.clauses.len();
-            for &c in clause.iter() {
-                self.watchers.entry(c).or_insert(vec![]).push(clause_idx);
-            }
+            self.watchers
+                .entry(clause[0].neg())
+                .or_insert_with(Vec::new)
+                .push(clause_idx);
+            self.watchers
+                .entry(clause[1].neg())
+                .or_insert_with(Vec::new)
+                .push(clause_idx);
+
             self.clauses.push(clause.to_vec());
         }
         /// Add a new clause to `clauses` and watch a clause.
@@ -100,8 +107,17 @@ pub mod solver {
                 while c.0 >= self.assigns.len() {
                     self.new_var();
                 }
-                self.watchers.entry(c).or_insert(vec![]).push(clause_idx);
             }
+
+            self.watchers
+                .entry(clause[0].neg())
+                .or_insert_with(Vec::new)
+                .push(clause_idx);
+            self.watchers
+                .entry(clause[1].neg())
+                .or_insert_with(Vec::new)
+                .push(clause_idx);
+
             self.clauses.push(clause.to_vec());
         }
 
@@ -109,37 +125,74 @@ pub mod solver {
         /// If a conflict is detected, this function returns a conflicted clause index.
         /// `None` is no conflicts.
         fn propagate(&mut self) -> Option<usize> {
-            while self.head < self.que.len() {
+            let mut conflict = None;
+            let mut update_watchers = VecDeque::new();
+            'conflict: while self.head < self.que.len() {
+                debug_assert_eq!(conflict, None);
                 let p = {
                     let v = self.que[self.head];
                     self.head += 1;
-                    (v, !self.assigns[v])
+                    (v, self.assigns[v])
                 };
+                let false_p = p.neg();
+                debug_assert!(self.level[p.0] > 0);
 
-                if let Some(watcher) = self.watchers.get(&p) {
-                    'next_clause: for &cr in watcher.iter() {
-                        let mut cnt = 0;
-                        //let clause = &mut self.clauses[*cr];
-                        let len = self.clauses[cr].len();
+                if let Some(watcher) = self.watchers.get_mut(&p) {
+                    let mut idx = 0;
+                    'next_clause: while idx < watcher.len() {
+                        debug_assert!(idx < watcher.len());
+                        let cr = watcher[idx];
+                        idx += 1;
+                        let clause = &mut self.clauses[cr];
+                        debug_assert!(clause[0] == false_p || clause[1] == false_p);
 
-                        for c in 0..len {
-                            let (v, sign) = self.clauses[cr][c];
-                            if self.level[v] == 0 {
-                                // this variable hasn't been decided yet
-                                self.clauses[cr].swap(c, 0);
-                                cnt += 1;
-                            } else if self.assigns[v] == sign {
-                                // this clause is already satisfied
-                                self.clauses[cr].swap(c, 0);
+                        // make sure that the clause[1] is the false literal.
+                        if clause[0] == false_p {
+                            clause.swap(0, 1);
+                        }
+                        let first = clause[0];
+                        // already satisfied
+                        if self.level[first.0] > 0 && self.assigns[first.0] == first.1 {
+                            debug_assert!(first != clause[1]);
+                            continue 'next_clause;
+                        }
+
+                        for k in 2..clause.len() {
+                            let lit = clause[k];
+                            // Found a literal isn't false(true or undefined)
+                            if self.level[lit.0] == 0 || self.assigns[lit.0] == lit.1 {
+                                clause.swap(1, k);
+
+                                watcher[idx - 1] = *watcher.last().unwrap();
+                                watcher.pop();
+
+                                update_watchers.push_back((clause[1].neg(), cr));
+                                // NOTE
+                                // Don't increase `idx` because you replace and the idx element with the last one.
+                                idx -= 1;
                                 continue 'next_clause;
                             }
                         }
-                        if cnt == 0 {
-                            return Some(cr);
-                        } else if cnt == 1 {
-                            // Unit clause
-                            let (var, sign) = self.clauses[cr][0];
-                            debug_assert!(self.level[var] == 0);
+                        debug_assert_eq!(watcher[idx - 1], cr);
+
+                        if self.level[first.0] > 0 {
+                            debug_assert!(self.assigns[first.0] != first.1);
+                            // CONFLICT
+                            // a first literal(clause[0]) is false.
+                            // clause[1] is a false
+                            // clause[2..len] is a false
+
+                            self.head = self.que.len();
+                            conflict = Some(cr);
+                            break 'conflict;
+                        } else {
+                            // UNIT PROPAGATION
+                            // a first literal(clause[0]) isn't assigned.
+                            // clause[1] is a false
+                            // clause[2..len] is a false
+
+                            let (var, sign) = first;
+                            debug_assert_eq!(self.level[var], 0);
                             // NOTE
                             // I don't know how to handle this borrowing problem. Please help me.
                             // self.enqueue(var, sign, Some(cr));
@@ -151,32 +204,41 @@ pub mod solver {
                             } else {
                                 1
                             };
+                            debug_assert!(self.level[var] > 0);
                             self.que.push_back(var);
                         }
                     }
                 }
+
+                while let Some((p, cr)) = update_watchers.pop_front() {
+                    self.watchers.entry(p).or_insert_with(Vec::new).push(cr);
+                }
             }
-            None
+            while let Some((p, cr)) = update_watchers.pop_front() {
+                self.watchers.entry(p).or_insert_with(Vec::new).push(cr);
+            }
+
+            conflict
         }
         /// Analyze a conflict clause and deduce a learnt clause to avoid a current conflict
         fn analyze(&mut self, mut confl: usize) {
             let mut que_tail = self.que.len() - 1;
             let mut checked_vars = HashSet::new();
             let current_level = self.level[self.que[que_tail]];
-
+            debug_assert!(current_level > 0);
             let mut learnt_clause = vec![];
-            let mut backtrack_level = 1;
+
             let mut same_level_cnt = 0;
             let mut skip = false;
             loop {
-                for p in self.clauses[confl].iter() {
+                for (i, p) in self.clauses[confl].iter().enumerate() {
                     let (var, _) = *p;
+                    debug_assert!(self.level[var] > 0);
                     if skip && var == self.que[que_tail] {
+                        debug_assert!(i == 0);
                         continue;
                     }
-                    if self.level[var] == 0 {
-                        continue;
-                    }
+
                     // already checked
                     if !checked_vars.insert(var) {
                         continue;
@@ -184,7 +246,6 @@ pub mod solver {
                     debug_assert!(self.level[var] <= current_level);
                     if self.level[var] < current_level {
                         learnt_clause.push(*p);
-                        backtrack_level = std::cmp::max(backtrack_level, self.level[var]);
                     } else {
                         same_level_cnt += 1;
                     }
@@ -207,10 +268,27 @@ pub mod solver {
                 confl = self.reason[self.que[que_tail]].unwrap();
             }
             let p = self.que[que_tail];
+
             learnt_clause.push((p, !self.assigns[p]));
-            if learnt_clause.len() == 1 {
-                backtrack_level = 1;
-            }
+            let n = learnt_clause.len();
+            learnt_clause.swap(0, n - 1);
+
+            let backtrack_level = if learnt_clause.len() == 1 {
+                1
+            } else {
+                let mut max_idx = 1;
+                let mut max_level = self.level[learnt_clause[max_idx].0];
+
+                for (i, lit) in learnt_clause.iter().enumerate().skip(2) {
+                    if self.level[lit.0] > max_level {
+                        max_level = self.level[lit.0];
+                        max_idx = i;
+                    }
+                }
+
+                learnt_clause.swap(1, max_idx);
+                max_level
+            };
 
             // Cancel decisions until the level is less than equal to the backtrack level
             while let Some(p) = self.que.back() {
@@ -221,12 +299,18 @@ pub mod solver {
                     break;
                 }
             }
+
             // propagate it by a new learnt clause
             if learnt_clause.len() == 1 {
-                self.enqueue(p, !self.assigns[p], None);
+                debug_assert_eq!(backtrack_level, 1);
+                self.enqueue(learnt_clause[0].0, learnt_clause[0].1, None);
                 self.head = self.que.len() - 1;
             } else {
-                self.enqueue(p, !self.assigns[p], Some(self.clauses.len()));
+                self.enqueue(
+                    learnt_clause[0].0,
+                    learnt_clause[0].1,
+                    Some(self.clauses.len()),
+                );
                 self.head = self.que.len() - 1;
                 self.add_clause_unchecked(&learnt_clause);
             }
@@ -296,16 +380,12 @@ pub mod solver {
                 } else {
                     // No Conflict
                     // Select a decision variable that isn't decided yet
-                    let mut p = None;
-                    for v in 0..self.n {
-                        if self.level[v] == 0 {
-                            p = Some(v);
-                            break;
-                        }
-                    }
-                    if let Some(p) = p {
-                        self.enqueue(p, self.assigns[p], None);
-                        self.level[p] += 1;
+                    let nxt_var = self.level.iter().position(|level| *level == 0);
+
+                    if let Some(nxt_var) = nxt_var {
+                        debug_assert_eq!(self.level[nxt_var], 0);
+                        self.enqueue(nxt_var, self.assigns[nxt_var], None);
+                        self.level[nxt_var] += 1;
                     } else {
                         // all variables are selected. which means that a formula is satisfied
                         return Status::Sat;
@@ -397,21 +477,5 @@ pub mod util {
             cla_num,
             clauses,
         })
-    }
-
-    pub fn sat_model_check(clauses: &[Vec<Lit>], assigns: &[bool]) -> bool {
-        for clause in clauses.iter() {
-            let mut satisfied = false;
-            for lit in clause {
-                if assigns[lit.0] == lit.1 {
-                    satisfied = true;
-                    break;
-                }
-            }
-            if !satisfied {
-                return false;
-            }
-        }
-        true
     }
 }
