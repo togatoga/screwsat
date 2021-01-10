@@ -108,6 +108,7 @@ pub mod solver {
                     self.new_var();
                 }
             }
+
             self.watchers
                 .entry(clause[0].neg())
                 .or_insert_with(Vec::new)
@@ -135,7 +136,7 @@ pub mod solver {
                 };
                 let false_p = p.neg();
                 debug_assert!(self.level[p.0] > 0);
-
+                
                 if let Some(watcher) = self.watchers.get_mut(&p) {
                     let mut idx = 0;
                     'next_clause: while idx < watcher.len() {
@@ -149,9 +150,7 @@ pub mod solver {
                         if clause[0] == false_p {
                             clause.swap(0, 1);
                         }
-                        debug_assert_eq!(clause[1], false_p);
                         let first = clause[0];
-
                         // already satisfied
                         if self.level[first.0] > 0 && self.assigns[first.0] == first.1 {
                             debug_assert!(first != clause[1]);
@@ -175,7 +174,7 @@ pub mod solver {
                             }
                         }
                         debug_assert_eq!(watcher[idx - 1], cr);
-
+                        
                         if self.level[first.0] > 0 {
                             debug_assert!(self.assigns[first.0] != first.1);
                             // CONFLICT
@@ -214,11 +213,12 @@ pub mod solver {
                         }
                     }
                 }
-                if let Some((p, cr)) = update_watchers.pop_front() {
+
+                while let Some((p, cr)) = update_watchers.pop_front() {
                     self.watchers.entry(p).or_insert_with(Vec::new).push(cr);
                 }
             }
-            if let Some((p, cr)) = update_watchers.pop_front() {
+            while let Some((p, cr)) = update_watchers.pop_front() {
                 self.watchers.entry(p).or_insert_with(Vec::new).push(cr);
             }
 
@@ -310,12 +310,7 @@ pub mod solver {
                 self.enqueue(learnt_clause[0].0, learnt_clause[0].1, None);
                 self.head = self.que.len() - 1;
             } else {
-                for i in 0..n {
-                    for j in i + 1..n {
-                        assert!(learnt_clause[i] != learnt_clause[j]);
-                        assert!(learnt_clause[i] != learnt_clause[j].neg());
-                    }
-                }
+              
                 self.enqueue(
                     learnt_clause[0].0,
                     learnt_clause[0].1,
