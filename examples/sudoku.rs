@@ -1,4 +1,5 @@
 use screwsat::solver::*;
+use screwsat::util;
 use std::collections::HashMap;
 
 fn lit_from_pos_and_val(n: usize, y: usize, x: usize, val: usize) -> Lit {
@@ -172,6 +173,9 @@ fn main() {
             Status::Sat => {
                 println!("SAT");
                 let result = board_from_assign(sudoku_9.len(), &solver.assigns);
+                if !util::sat_model_check(&clauses, &solver.assigns) {
+                    panic!("Assignments are wrong!!");
+                }
                 print_sudoku(&result, &sudoku_9);
             }
             Status::Unsat => {
@@ -212,6 +216,9 @@ fn main() {
             Status::Sat => {
                 println!("SAT");
                 let result = board_from_assign(sudoku_16.len(), &solver.assigns);
+                if !util::sat_model_check(&clauses, &solver.assigns) {
+                    panic!("Assignments are wrong!!");
+                }
                 print_sudoku(&result, &sudoku_16);
             }
             Status::Unsat => {

@@ -398,4 +398,20 @@ pub mod util {
             clauses,
         })
     }
+
+    pub fn sat_model_check(clauses: &[Vec<Lit>], assigns: &[bool]) -> bool {
+        for clause in clauses.iter() {
+            let mut satisfied = false;
+            for lit in clause {
+                if assigns[lit.0] == lit.1 {
+                    satisfied = true;
+                    break;
+                }
+            }
+            if !satisfied {
+                return false;
+            }
+        }
+        true
+    }
 }
