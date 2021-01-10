@@ -80,11 +80,11 @@ pub mod solver {
             let clause_idx = self.clauses.len();
             self.watchers
                 .entry(clause[0].neg())
-                .or_insert(vec![])
+                .or_insert_with(Vec::new)
                 .push(clause_idx);
             self.watchers
                 .entry(clause[1].neg())
-                .or_insert(vec![])
+                .or_insert_with(Vec::new)
                 .push(clause_idx);
 
             self.clauses.push(clause.to_vec());
@@ -110,11 +110,11 @@ pub mod solver {
             }
             self.watchers
                 .entry(clause[0].neg())
-                .or_insert(vec![])
+                .or_insert_with(Vec::new)
                 .push(clause_idx);
             self.watchers
                 .entry(clause[1].neg())
-                .or_insert(vec![])
+                .or_insert_with(Vec::new)
                 .push(clause_idx);
 
             self.clauses.push(clause.to_vec());
@@ -177,7 +177,7 @@ pub mod solver {
                         debug_assert_eq!(watcher[idx - 1], cr);
 
                         if self.level[first.0] > 0 {
-                            debug_assert!(self.assigns[first.0] == !first.1);
+                            debug_assert!(self.assigns[first.0] != first.1);
                             // CONFLICT
                             // a first literal(clause[0]) is false.
                             // clause[1] is a false
@@ -185,7 +185,7 @@ pub mod solver {
 
                             //Debug
                             for c in clause.iter() {
-                                assert!(self.level[c.0] > 0 && self.assigns[c.0] == !c.1);
+                                assert!(self.level[c.0] > 0 && self.assigns[c.0] != c.1);
                             }
                             self.head = self.que.len();
                             conflict = Some(cr);
@@ -215,11 +215,11 @@ pub mod solver {
                     }
                 }
                 if let Some((p, cr)) = update_watchers.pop_front() {
-                    self.watchers.entry(p).or_insert(vec![]).push(cr);
+                    self.watchers.entry(p).or_insert_with(Vec::new).push(cr);
                 }
             }
             if let Some((p, cr)) = update_watchers.pop_front() {
-                self.watchers.entry(p).or_insert(vec![]).push(cr);
+                self.watchers.entry(p).or_insert_with(Vec::new).push(cr);
             }
 
             conflict
@@ -283,9 +283,9 @@ pub mod solver {
                 let mut max_idx = 1;
                 let mut min_lvl = self.level[learnt_clause[max_idx].0];
 
-                for i in 2..learnt_clause.len() {
-                    if self.level[learnt_clause[i].0] > min_lvl {
-                        min_lvl = self.level[learnt_clause[i].0];
+                for (i, lit) in learnt_clause.iter().enumerate().skip(2) {
+                    if self.level[lit.0] > min_lvl {
+                        min_lvl = self.level[lit.0];
                         max_idx = i;
                     }
                 }
