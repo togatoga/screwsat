@@ -277,17 +277,17 @@ pub mod solver {
                 1
             } else {
                 let mut max_idx = 1;
-                let mut min_lvl = self.level[learnt_clause[max_idx].0];
+                let mut max_level = self.level[learnt_clause[max_idx].0];
 
                 for (i, lit) in learnt_clause.iter().enumerate().skip(2) {
-                    if self.level[lit.0] > min_lvl {
-                        min_lvl = self.level[lit.0];
+                    if self.level[lit.0] > max_level {
+                        max_level = self.level[lit.0];
                         max_idx = i;
                     }
                 }
 
                 learnt_clause.swap(1, max_idx);
-                min_lvl
+                max_level
             };
 
             // Cancel decisions until the level is less than equal to the backtrack level
@@ -477,53 +477,5 @@ pub mod util {
             cla_num,
             clauses,
         })
-    }
-
-    pub fn sat_model_check(clauses: &[Vec<Lit>], assigns: &[bool]) -> bool {
-        for clause in clauses.iter() {
-            let mut satisfied = false;
-            for lit in clause {
-                if assigns[lit.0] == lit.1 {
-                    satisfied = true;
-                    break;
-                }
-            }
-            if !satisfied {
-                return false;
-            }
-        }
-        true
-    }
-    pub fn clauses_to_cnf(clauses: &[Vec<Lit>], output_file_name: &str) -> std::io::Result<()> {
-        use std::io::prelude::*;
-
-        let mut f = std::fs::File::create(output_file_name)?;
-        let mut var_num = 0;
-        clauses.iter().for_each(|clause| {
-            for c in clause.iter() {
-                var_num = std::cmp::max(var_num, c.0 + 1);
-            }
-        });
-        writeln!(f, "p cnf {} {}", var_num, clauses.len())?;
-        for clause in clauses.iter() {
-            let line = clause
-                .iter()
-                .enumerate()
-                .map(|(i, x)| {
-                    let v = if x.1 {
-                        format!("{}", x.0 + 1)
-                    } else {
-                        format!("-{}", x.0 + 1)
-                    };
-                    if i == clause.len() - 1 {
-                        format!("{} 0", v)
-                    } else {
-                        format!("{} ", v)
-                    }
-                })
-                .collect::<String>();
-            writeln!(f, "{}", line)?;
-        }
-        Ok(())
     }
 }
