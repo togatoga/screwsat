@@ -96,11 +96,56 @@ pub mod solver {
         /// # Arguments
         /// * `clause` - a clause has one or some literal variables
         pub fn add_clause(&mut self, clause: &[Lit]) {
-            if clause.len() == 1 {
-                let c = clause[0];
+            // grow the space of array variables.
+            clause.iter().for_each(|c| {
                 while c.0 >= self.assigns.len() {
                     self.new_var();
                 }
+            });
+
+            // Simplify a clause
+            let mut clause = clause.to_vec();
+            clause.sort();
+            let mut len = 0;
+            for i in 0..clause.len() {
+                let mut remove = false;
+                if i >= 1 {
+                    // x0 v !x0 means a clause is already satisfied.
+                    // you don't need to add it.
+                    if clause[i] == clause[i - 1].neg() {
+                        return;
+                    }
+                    // x0 v x0 duplicated
+                    if clause[i] == clause[i - 1] {
+                        remove = true;
+                    }
+                }
+                let lit = clause[i];
+                //already assigned
+                if self.level[lit.0] > 0 {
+                    // a clause is already satisfied. You don't need to add it.
+                    if self.assigns[lit.0] == lit.1 {
+                        return;
+                    } else {
+                        // a literal is already false. You can remove it from a clause.
+                        remove = true;
+                    }
+                }
+
+                if !remove {
+                    clause[len] = lit;
+                    len += 1;
+                }
+            }
+            clause.truncate(len);
+
+            if clause.len() == 0 {
+                // Empty clause
+                self.status = Some(Status::Unsat);
+                return;
+            } else if clause.len() == 1 {
+                // Unit Clause
+                let c = clause[0];
                 // already assigned
                 if self.level[c.0] > 0 {
                     if self.assigns[c.0] != c.1 {
@@ -114,24 +159,19 @@ pub mod solver {
                     self.status = Some(Status::Unsat);
                 }
                 return;
+            } else {
+                debug_assert!(clause.len() >= 2);
+                let clause_idx = self.clauses.len();
+                self.watchers
+                    .entry(clause[0].neg())
+                    .or_insert_with(Vec::new)
+                    .push(clause_idx);
+                self.watchers
+                    .entry(clause[1].neg())
+                    .or_insert_with(Vec::new)
+                    .push(clause_idx);
+                self.clauses.push(clause.to_vec());
             }
-            let clause_idx = self.clauses.len();
-            clause.iter().for_each(|c| {
-                while c.0 >= self.assigns.len() {
-                    self.new_var();
-                }
-            });
-
-            self.watchers
-                .entry(clause[0].neg())
-                .or_insert_with(Vec::new)
-                .push(clause_idx);
-            self.watchers
-                .entry(clause[1].neg())
-                .or_insert_with(Vec::new)
-                .push(clause_idx);
-
-            self.clauses.push(clause.to_vec());
         }
 
         /// Propagate it by all enqueued values and check conflicts.
