@@ -3,10 +3,10 @@
 [![Crates.io](https://img.shields.io/crates/v/screwsat)](https://crates.io/crates/screwsat)
 
 A very simple CDCL(Conflict-Driven-Clause-Learning) SAT Solver in `Rust`. The total line of `solver` is around `400` lines.  
-I wrote it very simple to help people(including me) understating the inside of SAT Solver.  
+I wrote it very simple to help people(including me) understand the inside of SAT Solver.  
 
 
-I have implemented the core SAT Solver algorithms and techinques in `screwsat`.  
+I have implemented the core SAT Solver algorithms and techniques in `screwsat`.  
 #### Algorithms and Techniques
 - CDCL(Conflict-Driven-Clause-Learning)
 - Back Jump
@@ -22,15 +22,19 @@ But you can grasp some important points of SAT Solver from `screwsat`(I hope).
 - [AtCoder Beginner Contest 187 F - Close Group](https://atcoder.jp/contests/abc187/submissions/19235301)
 - [天下一プログラマーコンテスト2016本戦（オープンコンテスト） B - 今年の B 問題](https://atcoder.jp/contests/tenka1-2016-final-open/submissions/19375260)
 
+
+#### Testing
+
 You need to pull all SAT problems under the `cnf` directory that are stored by [`git-lfs`](https://git-lfs.github.com/) to run `cargo test`.
 
 ```
 % git lfs pull
+% cargo test -- --nocapture
 ```
 
 ## How to use
 
-`screwsat` can be used as a library and a command line tool.
+`screwsat` can be used as a library and a command-line tool.
 
 ## Command
 
@@ -78,7 +82,7 @@ screwsat="*"
 
 OR
 
-Copy `src/lib.rs` and Paste it.(Competitive Programming Style)
+Copy `src/lib.rs` and Paste it. (Competitive Programming Style)
 
 ### Usage(lib)
 
@@ -164,7 +168,7 @@ fn main() {
 
 ### Appreciation
 
-This code is really inspired by his simple good code [not522's SAT Solver](https://github.com/not522/CompetitiveProgramming/blob/master/include/math/sat.hpp)
+This code is really inspired by his good simple code [not522's SAT Solver](https://github.com/not522/CompetitiveProgramming/blob/master/include/math/sat.hpp)
 
 ### Contribution
-Contributions and feedbacks are welcome.(e.g. fix typo and tedious code and my English, report bugs/issues, **GIVE ME GITHUB STARS**)
+Contributions and feedbacks are welcome. (e.g., fix typo and tedious code and my English, report bugs/issues, **GIVE ME GITHUB STARS**)
