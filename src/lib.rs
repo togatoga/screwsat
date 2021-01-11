@@ -19,7 +19,7 @@ pub mod solver {
         }
     }
 
-    #[derive(PartialEq, Debug)]
+    #[derive(PartialEq, Debug, Copy, Clone)]
     /// The status of a problem that solver solved.
     /// - `Sat` a solver found that a given problem is SATISFIABLE.
     /// - `Unsat` a solver found that a given problem is UNSATISFIABLE.
@@ -47,8 +47,10 @@ pub mod solver {
         level: Vec<usize>,
         // assigned variables
         que: VecDeque<Var>,
-        //the head index of `que` points unprocessed elements
+        // the head index of `que` points unprocessed elements
         head: usize,
+        // the solver status. this value may be set by the functions `add_clause` and `solve`.
+        pub status: Option<Status>,
     }
 
     impl Solver {
@@ -94,31 +96,82 @@ pub mod solver {
         /// # Arguments
         /// * `clause` - a clause has one or some literal variables
         pub fn add_clause(&mut self, clause: &[Lit]) {
-            if clause.len() == 1 {
-                let c = clause[0];
+            // grow the space of array variables.
+            clause.iter().for_each(|c| {
                 while c.0 >= self.assigns.len() {
                     self.new_var();
+                }
+            });
+
+            // Simplify a clause
+            let mut clause = clause.to_vec();
+            clause.sort();
+            let mut len = 0;
+            for i in 0..clause.len() {
+                let mut remove = false;
+                if i >= 1 {
+                    // x0 v !x0 means a clause is already satisfied.
+                    // you don't need to add it.
+                    if clause[i] == clause[i - 1].neg() {
+                        return;
+                    }
+                    // x0 v x0 duplicated
+                    if clause[i] == clause[i - 1] {
+                        remove = true;
+                    }
+                }
+                let lit = clause[i];
+                //already assigned
+                if self.level[lit.0] > 0 {
+                    // a clause is already satisfied. You don't need to add it.
+                    if self.assigns[lit.0] == lit.1 {
+                        return;
+                    } else {
+                        // a literal is already false. You can remove it from a clause.
+                        remove = true;
+                    }
+                }
+
+                if !remove {
+                    clause[len] = lit;
+                    len += 1;
+                }
+            }
+            clause.truncate(len);
+
+            if clause.len() == 0 {
+                // Empty clause
+                self.status = Some(Status::Unsat);
+                return;
+            } else if clause.len() == 1 {
+                // Unit Clause
+                let c = clause[0];
+                // already assigned
+                if self.level[c.0] > 0 {
+                    if self.assigns[c.0] != c.1 {
+                        self.status = Some(Status::Unsat);
+                    }
+                    return;
                 }
                 self.enqueue(c.0, c.1, None);
-                return;
-            }
-            let clause_idx = self.clauses.len();
-            for &c in clause.iter() {
-                while c.0 >= self.assigns.len() {
-                    self.new_var();
+                // If the conflict happnes at the root level(decision level: 0), which means that a given problem is UNSATISFIABLE.
+                if self.propagate().is_some() {
+                    self.status = Some(Status::Unsat);
                 }
+                return;
+            } else {
+                debug_assert!(clause.len() >= 2);
+                let clause_idx = self.clauses.len();
+                self.watchers
+                    .entry(clause[0].neg())
+                    .or_insert_with(Vec::new)
+                    .push(clause_idx);
+                self.watchers
+                    .entry(clause[1].neg())
+                    .or_insert_with(Vec::new)
+                    .push(clause_idx);
+                self.clauses.push(clause.to_vec());
             }
-
-            self.watchers
-                .entry(clause[0].neg())
-                .or_insert_with(Vec::new)
-                .push(clause_idx);
-            self.watchers
-                .entry(clause[1].neg())
-                .or_insert_with(Vec::new)
-                .push(clause_idx);
-
-            self.clauses.push(clause.to_vec());
         }
 
         /// Propagate it by all enqueued values and check conflicts.
@@ -330,6 +383,7 @@ pub mod solver {
                 level: vec![0; n],
                 assigns: vec![false; n],
                 watchers: HashMap::new(),
+                status: None,
             };
             for clause in clauses.iter() {
                 if clause.len() == 1 {
@@ -362,11 +416,15 @@ pub mod solver {
         /// * `time_limit` - The time limitation for searching.
         /// Exceeding the time limit returns `Indeterminate`
         pub fn solve(&mut self, time_limit: Option<Duration>) -> Status {
+            if let Some(status) = self.status.as_ref() {
+                return *status;
+            }
             let start = Instant::now();
             loop {
                 if let Some(time_limit) = time_limit {
                     if start.elapsed() > time_limit {
                         // exceed the time limit
+                        self.status = Some(Status::Indeterminate);
                         return Status::Indeterminate;
                     }
                 }
@@ -374,6 +432,7 @@ pub mod solver {
                     //Conflict
                     let current_level = self.level[*self.que.back().unwrap()];
                     if current_level == 1 {
+                        self.status = Some(Status::Unsat);
                         return Status::Unsat;
                     }
                     self.analyze(confl);
@@ -388,6 +447,7 @@ pub mod solver {
                         self.level[nxt_var] += 1;
                     } else {
                         // all variables are selected. which means that a formula is satisfied
+                        self.status = Some(Status::Sat);
                         return Status::Sat;
                     }
                 }
