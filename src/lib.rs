@@ -19,7 +19,7 @@ pub mod solver {
         }
     }
 
-    #[derive(PartialEq, Debug)]
+    #[derive(PartialEq, Debug, Copy, Clone)]
     /// The status of a problem that solver solved.
     /// - `Sat` a solver found that a given problem is SATISFIABLE.
     /// - `Unsat` a solver found that a given problem is UNSATISFIABLE.
@@ -47,8 +47,10 @@ pub mod solver {
         level: Vec<usize>,
         // assigned variables
         que: VecDeque<Var>,
-        //the head index of `que` points unprocessed elements
+        // the head index of `que` points unprocessed elements
         head: usize,
+        // the solver status. this value may be set by the functions `add_clause` and `solve`.
+        pub status: Option<Status>,
     }
 
     impl Solver {
@@ -99,15 +101,26 @@ pub mod solver {
                 while c.0 >= self.assigns.len() {
                     self.new_var();
                 }
+                // already assigned
+                if self.level[c.0] > 0 {
+                    if self.assigns[c.0] != c.1 {
+                        self.status = Some(Status::Unsat);
+                    }
+                    return;
+                }
                 self.enqueue(c.0, c.1, None);
+                // If the conflict happnes at the root level(decision level: 0), which means that a given problem is UNSATISFIABLE.
+                if self.propagate().is_some() {
+                    self.status = Some(Status::Unsat);
+                }
                 return;
             }
             let clause_idx = self.clauses.len();
-            for &c in clause.iter() {
+            clause.iter().for_each(|c| {
                 while c.0 >= self.assigns.len() {
                     self.new_var();
                 }
-            }
+            });
 
             self.watchers
                 .entry(clause[0].neg())
@@ -330,6 +343,7 @@ pub mod solver {
                 level: vec![0; n],
                 assigns: vec![false; n],
                 watchers: HashMap::new(),
+                status: None,
             };
             for clause in clauses.iter() {
                 if clause.len() == 1 {
@@ -362,11 +376,15 @@ pub mod solver {
         /// * `time_limit` - The time limitation for searching.
         /// Exceeding the time limit returns `Indeterminate`
         pub fn solve(&mut self, time_limit: Option<Duration>) -> Status {
+            if let Some(status) = self.status.as_ref() {
+                return *status;
+            }
             let start = Instant::now();
             loop {
                 if let Some(time_limit) = time_limit {
                     if start.elapsed() > time_limit {
                         // exceed the time limit
+                        self.status = Some(Status::Indeterminate);
                         return Status::Indeterminate;
                     }
                 }
@@ -374,6 +392,7 @@ pub mod solver {
                     //Conflict
                     let current_level = self.level[*self.que.back().unwrap()];
                     if current_level == 1 {
+                        self.status = Some(Status::Unsat);
                         return Status::Unsat;
                     }
                     self.analyze(confl);
@@ -388,6 +407,7 @@ pub mod solver {
                         self.level[nxt_var] += 1;
                     } else {
                         // all variables are selected. which means that a formula is satisfied
+                        self.status = Some(Status::Sat);
                         return Status::Sat;
                     }
                 }
