@@ -144,10 +144,9 @@ pub mod solver {
             }
             clause.truncate(len);
 
-            if clause.len() == 0 {
+            if clause.is_empty() {
                 // Empty clause
                 self.status = Some(Status::Unsat);
-                return;
             } else if clause.len() == 1 {
                 // Unit Clause
                 let c = clause[0];
@@ -163,7 +162,6 @@ pub mod solver {
                 if self.propagate().is_some() {
                     self.status = Some(Status::Unsat);
                 }
-                return;
             } else {
                 debug_assert!(clause.len() >= 2);
                 let clause_idx = self.clauses.len();
@@ -186,90 +184,91 @@ pub mod solver {
             let mut conflict = None;
             let mut update_watchers = VecDeque::new();
             'conflict: while self.head < self.que.len() {
+                while let Some((p, cr)) = update_watchers.pop_front() {
+                    self.watchers.entry(p).or_insert_with(Vec::new).push(cr);
+                }
                 debug_assert_eq!(conflict, None);
                 let p = {
                     let v = self.que[self.head];
                     self.head += 1;
                     (v, self.assigns[v])
                 };
-                let false_p = p.neg();
+
                 debug_assert!(self.level[p.0] > 0);
+                let watcher = match self.watchers.get_mut(&p) {
+                    Some(watcher) => watcher,
+                    None => continue,
+                };
+                let false_p = p.neg();
+                let mut idx = 0;
+                'next_clause: while idx < watcher.len() {
+                    debug_assert!(idx < watcher.len());
+                    let cr = watcher[idx];
+                    let clause = &mut self.clauses[cr];
+                    debug_assert!(clause[0] == false_p || clause[1] == false_p);
 
-                if let Some(watcher) = self.watchers.get_mut(&p) {
-                    let mut idx = 0;
-                    'next_clause: while idx < watcher.len() {
-                        debug_assert!(idx < watcher.len());
-                        let cr = watcher[idx];
+                    // make sure that the clause[1] is the false literal.
+                    if clause[0] == false_p {
+                        clause.swap(0, 1);
+                    }
+                    let first = clause[0];
+                    // already satisfied
+                    if self.level[first.0] > 0 && self.assigns[first.0] == first.1 {
+                        debug_assert!(first != clause[1]);
                         idx += 1;
-                        let clause = &mut self.clauses[cr];
-                        debug_assert!(clause[0] == false_p || clause[1] == false_p);
+                        continue 'next_clause;
+                    }
 
-                        // make sure that the clause[1] is the false literal.
-                        if clause[0] == false_p {
-                            clause.swap(0, 1);
-                        }
-                        let first = clause[0];
-                        // already satisfied
-                        if self.level[first.0] > 0 && self.assigns[first.0] == first.1 {
-                            debug_assert!(first != clause[1]);
+                    for k in 2..clause.len() {
+                        let lit = clause[k];
+                        // Found a literal isn't false(true or undefined)
+                        if self.level[lit.0] == 0 || self.assigns[lit.0] == lit.1 {
+                            clause.swap(1, k);
+
+                            watcher[idx] = *watcher.last().unwrap();
+                            watcher.pop();
+
+                            update_watchers.push_back((clause[1].neg(), cr));
+                            // NOTE
+                            // Don't increase `idx` because you replace and the idx element with the last one.
                             continue 'next_clause;
                         }
-
-                        for k in 2..clause.len() {
-                            let lit = clause[k];
-                            // Found a literal isn't false(true or undefined)
-                            if self.level[lit.0] == 0 || self.assigns[lit.0] == lit.1 {
-                                clause.swap(1, k);
-
-                                watcher[idx - 1] = *watcher.last().unwrap();
-                                watcher.pop();
-
-                                update_watchers.push_back((clause[1].neg(), cr));
-                                // NOTE
-                                // Don't increase `idx` because you replace and the idx element with the last one.
-                                idx -= 1;
-                                continue 'next_clause;
-                            }
-                        }
-                        debug_assert_eq!(watcher[idx - 1], cr);
-
-                        if self.level[first.0] > 0 {
-                            debug_assert!(self.assigns[first.0] != first.1);
-                            // CONFLICT
-                            // a first literal(clause[0]) is false.
-                            // clause[1] is a false
-                            // clause[2..len] is a false
-
-                            self.head = self.que.len();
-                            conflict = Some(cr);
-                            break 'conflict;
-                        } else {
-                            // UNIT PROPAGATION
-                            // a first literal(clause[0]) isn't assigned.
-                            // clause[1] is a false
-                            // clause[2..len] is a false
-
-                            let (var, sign) = first;
-                            debug_assert_eq!(self.level[var], 0);
-                            // NOTE
-                            // I don't know how to handle this borrowing problem. Please help me.
-                            // self.enqueue(var, sign, Some(cr));
-                            self.unselected_vars.remove(&var);
-                            self.assigns[var] = sign;
-                            self.reason[var] = Some(cr);
-                            self.level[var] = if let Some(last) = self.que.back() {
-                                self.level[*last]
-                            } else {
-                                1
-                            };
-                            debug_assert!(self.level[var] > 0);
-                            self.que.push_back(var);
-                        }
                     }
-                }
+                    debug_assert_eq!(watcher[idx], cr);
 
-                while let Some((p, cr)) = update_watchers.pop_front() {
-                    self.watchers.entry(p).or_insert_with(Vec::new).push(cr);
+                    if self.level[first.0] > 0 {
+                        debug_assert!(self.assigns[first.0] != first.1);
+                        // CONFLICT
+                        // a first literal(clause[0]) is false.
+                        // clause[1] is a false
+                        // clause[2..len] is a false
+
+                        self.head = self.que.len();
+                        conflict = Some(cr);
+                        break 'conflict;
+                    } else {
+                        // UNIT PROPAGATION
+                        // a first literal(clause[0]) isn't assigned.
+                        // clause[1] is a false
+                        // clause[2..len] is a false
+
+                        let (var, sign) = first;
+                        debug_assert_eq!(self.level[var], 0);
+                        // NOTE
+                        // I don't know how to handle this borrowing problem. Please help me.
+                        // self.enqueue(var, sign, Some(cr));
+                        self.unselected_vars.remove(&var);
+                        self.assigns[var] = sign;
+                        self.reason[var] = Some(cr);
+                        self.level[var] = if let Some(last) = self.que.back() {
+                            self.level[*last]
+                        } else {
+                            1
+                        };
+                        debug_assert!(self.level[var] > 0);
+                        self.que.push_back(var);
+                    }
+                    idx += 1;
                 }
             }
             while let Some((p, cr)) = update_watchers.pop_front() {
@@ -292,8 +291,8 @@ pub mod solver {
                 for (i, p) in self.clauses[confl].iter().enumerate() {
                     let (var, _) = *p;
                     debug_assert!(self.level[var] > 0);
-                    if skip && var == self.que[que_tail] {
-                        debug_assert!(i == 0);
+                    if skip && i == 0 {
+                        debug_assert!(var == self.que[que_tail]);
                         continue;
                     }
 
@@ -336,7 +335,6 @@ pub mod solver {
             } else {
                 let mut max_idx = 1;
                 let mut max_level = self.level[learnt_clause[max_idx].0];
-
                 for (i, lit) in learnt_clause.iter().enumerate().skip(2) {
                     if self.level[lit.0] > max_level {
                         max_level = self.level[lit.0];
@@ -387,19 +385,18 @@ pub mod solver {
                 clauses: Vec::new(),
                 reason: vec![None; n],
                 level: vec![0; n],
-                unselected_vars: BTreeSet::from((0..n).map(|x| x).collect()),
+                unselected_vars: (0..n).map(|x| x).collect(),
                 assigns: vec![false; n],
                 watchers: HashMap::new(),
                 status: None,
             };
-
-            for clause in clauses.iter() {
+            clauses.iter().for_each(|clause| {
                 if clause.len() == 1 {
                     solver.enqueue(clause[0].0, clause[0].1, None);
                 } else {
                     solver.add_clause_unchecked(clause);
                 }
-            }
+            });
             solver
         }
         /// Reserve the space of a clause database
