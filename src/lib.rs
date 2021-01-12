@@ -1,7 +1,7 @@
 pub mod solver {
 
     use std::{
-        collections::{HashMap, HashSet, VecDeque},
+        collections::{BTreeSet, HashMap, HashSet, VecDeque},
         time::{Duration, Instant},
         vec,
     };
@@ -45,6 +45,8 @@ pub mod solver {
         reason: Vec<Option<usize>>,
         // decision level(0: unassigned, 1: minimum level)
         level: Vec<usize>,
+        // variables aren't assigned yet.
+        unselected_vars: BTreeSet<Var>,
         // assigned variables
         que: VecDeque<Var>,
         // the head index of `que` points unprocessed elements
@@ -57,6 +59,8 @@ pub mod solver {
         /// Enqueue a variable to assign a `value` to a boolean `assign`
         fn enqueue(&mut self, var: Var, assign: bool, reason: Option<usize>) {
             debug_assert!(self.level[var] == 0);
+            debug_assert!(self.unselected_vars.contains(&var));
+            self.unselected_vars.remove(&var);
             self.assigns[var] = assign;
             self.reason[var] = reason;
             self.level[var] = if let Some(last) = self.que.back() {
@@ -69,6 +73,7 @@ pub mod solver {
 
         // Create a new space for one variable.
         pub fn new_var(&mut self) {
+            self.unselected_vars.insert(self.n);
             self.n += 1;
             self.assigns.push(false);
             self.reason.push(None);
@@ -249,7 +254,7 @@ pub mod solver {
                             // NOTE
                             // I don't know how to handle this borrowing problem. Please help me.
                             // self.enqueue(var, sign, Some(cr));
-
+                            self.unselected_vars.remove(&var);
                             self.assigns[var] = sign;
                             self.reason[var] = Some(cr);
                             self.level[var] = if let Some(last) = self.que.back() {
@@ -346,6 +351,7 @@ pub mod solver {
             // Cancel decisions until the level is less than equal to the backtrack level
             while let Some(p) = self.que.back() {
                 if self.level[*p] > backtrack_level {
+                    self.unselected_vars.insert(*p);
                     self.level[*p] = 0;
                     self.que.pop_back();
                 } else {
@@ -381,10 +387,12 @@ pub mod solver {
                 clauses: Vec::new(),
                 reason: vec![None; n],
                 level: vec![0; n],
+                unselected_vars: BTreeSet::from((0..n).map(|x| x).collect()),
                 assigns: vec![false; n],
                 watchers: HashMap::new(),
                 status: None,
             };
+
             for clause in clauses.iter() {
                 if clause.len() == 1 {
                     solver.enqueue(clause[0].0, clause[0].1, None);
@@ -439,9 +447,9 @@ pub mod solver {
                 } else {
                     // No Conflict
                     // Select a decision variable that isn't decided yet
-                    let nxt_var = self.level.iter().position(|level| *level == 0);
+                    let nxt_var = self.unselected_vars.iter().next();
 
-                    if let Some(nxt_var) = nxt_var {
+                    if let Some(&nxt_var) = nxt_var {
                         debug_assert_eq!(self.level[nxt_var], 0);
                         self.enqueue(nxt_var, self.assigns[nxt_var], None);
                         self.level[nxt_var] += 1;
