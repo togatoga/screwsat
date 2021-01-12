@@ -23,3 +23,6 @@ name="screwsat"
 
 [dev-dependencies]
 walkdir="2"
+
+[profile.release]
+debug = true

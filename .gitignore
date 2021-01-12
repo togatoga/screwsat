@@ -18,3 +18,5 @@ Cargo.lock
 #**/*.rs.bk
 
 *.tar.gz
+perf*
+*.svg
