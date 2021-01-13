@@ -286,6 +286,7 @@ pub mod solver {
 
             let mut same_level_cnt = 0;
 
+            // implication graph nodes that are start point from a conflict clause.
             for p in self.clauses[confl].iter() {
                 let (var, _) = *p;
                 debug_assert!(self.level[var] > 0);
@@ -301,40 +302,43 @@ pub mod solver {
                 }
             }
 
-            let mut que_tail = self.que.len() - 1;
-            loop {
-                // Traverse an implication graph to 1-UIP(unique implication point)
-                // Find the latest a value that is checked
-                while !checked_vars.contains(&self.que[que_tail]) {
-                    que_tail -= 1;
-                }
-
-                debug_assert_eq!(self.level[self.que[que_tail]], current_level);
-                same_level_cnt -= 1;
-                // There is no variables that are at the conflict level
-                if same_level_cnt <= 0 {
-                    break;
-                }
-                // Next
-                checked_vars.remove(&self.que[que_tail]);
-                let reason = self.reason[self.que[que_tail]].unwrap();
-                debug_assert!(self.clauses[reason][0].0 == self.que[que_tail]);
-                for p in self.clauses[reason].iter().skip(1) {
-                    let var = p.0;
-                    // already checked
-                    if !checked_vars.insert(var) {
+            // Traverse an implication graph to 1-UIP(unique implication point)
+            let first_uip = {
+                let mut p = None;
+                for &v in self.que.iter().rev() {
+                    // Skip a variable that isn't checked.
+                    if !checked_vars.contains(&v) {
                         continue;
                     }
-                    debug_assert!(self.level[var] <= current_level);
-                    if self.level[var] < current_level {
-                        learnt_clause.push(*p);
-                    } else {
-                        same_level_cnt += 1;
+
+                    debug_assert_eq!(self.level[v], current_level);
+                    same_level_cnt -= 1;
+                    // There is no variables that are at the conflict level
+                    if same_level_cnt <= 0 {
+                        p = Some(v);
+                        break;
+                    }
+                    let reason = self.reason[v].unwrap();
+                    debug_assert!(self.clauses[reason][0].0 == v);
+                    for p in self.clauses[reason].iter().skip(1) {
+                        let var = p.0;
+                        // already checked
+                        if !checked_vars.insert(var) {
+                            continue;
+                        }
+                        debug_assert!(self.level[var] <= current_level);
+                        if self.level[var] < current_level {
+                            learnt_clause.push(*p);
+                        } else {
+                            same_level_cnt += 1;
+                        }
                     }
                 }
-            }
+                p
+            };
+
             // p is 1-UIP.
-            let p = self.que[que_tail];
+            let p = first_uip.unwrap();
             learnt_clause.push((p, !self.assigns[p]));
             let n = learnt_clause.len();
             learnt_clause.swap(0, n - 1);
