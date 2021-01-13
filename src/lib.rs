@@ -278,24 +278,49 @@ pub mod solver {
             conflict
         }
         /// Analyze a conflict clause and deduce a learnt clause to avoid a current conflict
-        fn analyze(&mut self, mut confl: usize) {
-            let mut que_tail = self.que.len() - 1;
+        fn analyze(&mut self, confl: usize) {
             let mut checked_vars = HashSet::new();
-            let current_level = self.level[self.que[que_tail]];
+            let current_level = self.level[self.que[self.que.len() - 1]];
             debug_assert!(current_level > 0);
             let mut learnt_clause = vec![];
 
             let mut same_level_cnt = 0;
-            let mut skip = false;
-            loop {
-                for (i, p) in self.clauses[confl].iter().enumerate() {
-                    let (var, _) = *p;
-                    debug_assert!(self.level[var] > 0);
-                    if skip && i == 0 {
-                        debug_assert!(var == self.que[que_tail]);
-                        continue;
-                    }
 
+            for p in self.clauses[confl].iter() {
+                let (var, _) = *p;
+                debug_assert!(self.level[var] > 0);
+                // already checked
+                if !checked_vars.insert(var) {
+                    continue;
+                }
+                debug_assert!(self.level[var] <= current_level);
+                if self.level[var] < current_level {
+                    learnt_clause.push(*p);
+                } else {
+                    same_level_cnt += 1;
+                }
+            }
+
+            let mut que_tail = self.que.len() - 1;
+            loop {
+                // Traverse an implication graph to 1-UIP(unique implication point)
+                // Find the latest a value that is checked
+                while !checked_vars.contains(&self.que[que_tail]) {
+                    que_tail -= 1;
+                }
+
+                debug_assert_eq!(self.level[self.que[que_tail]], current_level);
+                same_level_cnt -= 1;
+                // There is no variables that are at the conflict level
+                if same_level_cnt <= 0 {
+                    break;
+                }
+                // Next
+                checked_vars.remove(&self.que[que_tail]);
+                let reason = self.reason[self.que[que_tail]].unwrap();
+                debug_assert!(self.clauses[reason][0].0 == self.que[que_tail]);
+                for p in self.clauses[reason].iter().skip(1) {
+                    let var = p.0;
                     // already checked
                     if !checked_vars.insert(var) {
                         continue;
@@ -307,28 +332,13 @@ pub mod solver {
                         same_level_cnt += 1;
                     }
                 }
-
-                // Find the latest a value that is checked
-                while !checked_vars.contains(&self.que[que_tail]) {
-                    que_tail -= 1;
-                }
-
-                same_level_cnt -= 1;
-                // There is no variables that are at the conflict level
-                if same_level_cnt <= 0 {
-                    break;
-                }
-                // Next
-                skip = true;
-                checked_vars.remove(&self.que[que_tail]);
-                debug_assert_eq!(self.level[self.que[que_tail]], current_level);
-                confl = self.reason[self.que[que_tail]].unwrap();
             }
+            // p is 1-UIP.
             let p = self.que[que_tail];
-
             learnt_clause.push((p, !self.assigns[p]));
             let n = learnt_clause.len();
             learnt_clause.swap(0, n - 1);
+            debug_assert!(checked_vars.len() == learnt_clause.len());
 
             let backtrack_level = if learnt_clause.len() == 1 {
                 1
