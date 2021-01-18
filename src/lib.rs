@@ -357,18 +357,20 @@ pub mod solver {
         }
         fn unwatch_clause(&mut self, cwr: &CWRef) {
             let clause = cwr.upgrade().unwrap();
+            let mut cnt = 0;
             for idx in 0..2 {
                 let p = !clause.borrow()[idx];
                 let n = self.watchers[p].len();
                 for i in 0..n {
-                    assert!(self.watchers[p][i].upgrade().is_some());
                     if self.watchers[p][i].ptr_eq(&cwr) {
                         self.watchers[p][i] = self.watchers[p].last().unwrap().clone();
                         self.watchers[p].pop();
+                        cnt += 1;
                         break;
                     }
                 }
             }
+            assert!(cnt == 2);
         }
         fn reduce_learnts(&mut self) {
             self.learnts.sort_by_key(|x| x.0.borrow_mut().len());
@@ -386,6 +388,23 @@ pub mod solver {
             }
 
             self.learnts.truncate(new_size);
+        }
+
+        fn pop_queue_until(&mut self, backtrack_level: usize) {
+            while let Some(p) = self.que.back() {
+                if self.level[p.var()] > backtrack_level {
+                    self.reason[p.var()] = None;
+                    self.level[p.var()] = 0;
+                    self.que.pop_back();
+                } else {
+                    break;
+                }
+            }
+            if self.que.is_empty() {
+                self.head = 0;
+            } else {
+                self.head = self.que.len() - 1;
+            }
         }
         /// Analyze a conflict clause and deduce a learnt clause to avoid a current conflict
         fn analyze(&mut self, confl: CWRef) {
@@ -475,25 +494,16 @@ pub mod solver {
             };
 
             // Cancel decisions until the level is less than equal to the backtrack level
-            while let Some(p) = self.que.back() {
-                if self.level[p.var()] > backtrack_level {
-                    self.level[p.var()] = 0;
-                    self.que.pop_back();
-                } else {
-                    break;
-                }
-            }
+            self.pop_queue_until(backtrack_level);
 
             // propagate it by a new learnt clause
             if learnt_clause.len() == 1 {
                 debug_assert_eq!(backtrack_level, 1);
                 self.enqueue(learnt_clause[0], None);
-                self.head = self.que.len() - 1;
             } else {
                 let first = learnt_clause[0];
                 let cr = CRef::new(learnt_clause);
                 self.enqueue(first, Some(cr.clone()));
-                self.head = self.que.len() - 1;
                 self.add_clause_unchecked(cr, true);
             }
         }
@@ -552,6 +562,8 @@ pub mod solver {
             }
             let start = Instant::now();
             let mut max_learnt_clause = self.clauses.len() as f64 * 0.1;
+            let mut conflict_cnt = 0;
+            let mut restart_limit = 100.0;
 
             loop {
                 if let Some(time_limit) = time_limit {
@@ -569,10 +581,15 @@ pub mod solver {
                         self.status = Some(Status::Unsat);
                         return Status::Unsat;
                     }
+                    conflict_cnt += 1;
                     self.analyze(confl);
                 } else {
                     // No Conflict
-                    //eprintln!("{} {}", max_learnt_clause, self.learnts.len());
+                    if conflict_cnt as f64 >= restart_limit {
+                        restart_limit *= 1.1;
+                        self.pop_queue_until(1);
+                    }
+
                     if max_learnt_clause as usize <= self.learnts.len() {
                         self.reduce_learnts();
                         max_learnt_clause *= 1.1;
