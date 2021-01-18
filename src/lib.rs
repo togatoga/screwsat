@@ -34,7 +34,7 @@ pub mod solver {
     }
     impl From<i32> for Lit {
         fn from(x: i32) -> Self {
-            assert!(x != 0);
+            debug_assert!(x != 0);
             let d = x.abs() as u32 - 1;
             if x > 0 {
                 Lit(2 * d)
@@ -427,13 +427,15 @@ pub mod solver {
 
                 let false_p = !p;
                 let mut idx = 0;
+
                 'next_clause: while idx < self.watchers[p].len() {
-                    debug_assert!(idx < self.watchers[p].len());
+                    let m = self.watchers[p].len();
+                    debug_assert!(idx < m);
                     let cwr = self.watchers[p][idx].clone();
-                    assert!(cwr.upgrade().is_some());
+                    debug_assert!(cwr.upgrade().is_some());
 
                     let cr = cwr.upgrade().unwrap();
-                    assert!(Rc::strong_count(&cr) == 2);
+                    debug_assert!(Rc::strong_count(&cr) == 2);
                     let mut clause = cr.borrow_mut();
 
                     debug_assert!(clause[0] == false_p || clause[1] == false_p);
@@ -456,7 +458,7 @@ pub mod solver {
                         if self.eval(lit) != LitBool::False {
                             clause.swap(1, k);
 
-                            self.watchers[p][idx] = self.watchers[p].last().unwrap().clone();
+                            self.watchers[p].swap(idx, m - 1);
                             self.watchers[p].pop();
 
                             self.watchers[!clause[1]].push(cwr);
@@ -511,14 +513,14 @@ pub mod solver {
                 let n = self.watchers[p].len();
                 for i in 0..n {
                     if self.watchers[p][i].ptr_eq(&cwr) {
-                        self.watchers[p][i] = self.watchers[p].last().unwrap().clone();
+                        self.watchers[p].swap(i, n - 1);
                         self.watchers[p].pop();
                         cnt += 1;
                         break;
                     }
                 }
             }
-            assert!(cnt == 2);
+            debug_assert!(cnt == 2);
         }
         fn reduce_learnts(&mut self) {
             self.learnts.sort_by_key(|x| x.0.borrow_mut().len());
@@ -612,7 +614,7 @@ pub mod solver {
             let mut learnt_clause = vec![];
 
             let mut same_level_cnt = 0;
-            assert!(confl.upgrade().is_some());
+            debug_assert!(confl.upgrade().is_some());
             let clause = confl.upgrade().unwrap();
             // implication graph nodes that are start point from a conflict clause.
             for p in clause.borrow().iter() {
@@ -649,9 +651,9 @@ pub mod solver {
                         p = Some(lit);
                         break;
                     }
-                    assert!(self.reason[v].is_some());
+                    debug_assert!(self.reason[v].is_some());
                     let reason = self.reason[v].as_ref().unwrap();
-                    assert!(reason.upgrade().is_some());
+                    debug_assert!(reason.upgrade().is_some());
                     let clause = reason.upgrade().unwrap();
                     //debug_assert!(self.clauses[reason][0].0 == v);
                     for p in clause.borrow().iter().skip(1) {
