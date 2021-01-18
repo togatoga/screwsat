@@ -1,6 +1,6 @@
 use std::vec;
 
-use screwsat::solver::Solver;
+use screwsat::solver::*;
 use screwsat::util;
 fn main() {
     {
@@ -9,16 +9,16 @@ fn main() {
         // A problem is (x1 v ¬x5 v x4) ∧ (¬x1 v x5 v x3 v x4) ∧ (x3 v x4)
         let clauses = vec![
             // (x1 v ¬x5 v x4)
-            vec![(0, true), (4, false), (3, true)],
+            vec![Lit::from(1), Lit::from(-5), Lit::from(4)],
             // (¬x1 v x5 v x3 v x4)
-            vec![(0, false), (4, true), (2, true), (3, true)],
+            vec![Lit::from(-1), Lit::from(5), Lit::from(3), Lit::from(4)],
             // (x3 v x4)
-            vec![(2, true), (3, true)],
+            vec![Lit::from(3), Lit::from(4)],
         ];
         // Add clauses to solver
         clauses
             .into_iter()
-            .for_each(|clause| solver.add_clause(clause));
+            .for_each(|clause| solver.add_clause(&clause));
 
         let status = solver.solve(None);
         // Sat: A problem is SATISFIABLE.

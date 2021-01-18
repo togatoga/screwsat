@@ -3,7 +3,8 @@ use std::collections::HashMap;
 
 fn lit_from_pos_and_val(n: usize, y: usize, x: usize, val: usize) -> Lit {
     // x_y_x_v
-    (n * n * y + n * x + (val - 1), true)
+
+    Lit::new(Var((n * n * y + n * x + (val - 1)) as u32), true)
 }
 /// n by n Sudoku
 /// Sudoku Condition:
@@ -20,7 +21,7 @@ fn clauses_from_sudoku(board: &[Vec<u32>]) -> Vec<Vec<Lit>> {
     for r in 0..n {
         for c in 0..n {
             // x_r_c_v
-            let clause: Vec<Lit> = (1..=n)
+            let clause: Vec<_> = (1..=n)
                 .map(|val| lit_from_pos_and_val(n, r, c, val))
                 .collect();
             cell_to_lits.insert((r, c), clause);
@@ -36,7 +37,7 @@ fn clauses_from_sudoku(board: &[Vec<u32>]) -> Vec<Vec<Lit>> {
             // 2.
             for (i, &l1) in clause.iter().enumerate() {
                 for &l2 in clause.iter().skip(i + 1) {
-                    clauses.push(vec![l1.neg(), l2.neg()]);
+                    clauses.push(vec![!l1, !l2]);
                 }
             }
         }
@@ -48,7 +49,7 @@ fn clauses_from_sudoku(board: &[Vec<u32>]) -> Vec<Vec<Lit>> {
                 let clause1 = cell_to_lits.get(&(r1, c)).unwrap();
                 let clause2 = cell_to_lits.get(&(r2, c)).unwrap();
                 for v in 1..=n {
-                    clauses.push(vec![clause1[v - 1].neg(), clause2[v - 1].neg()]);
+                    clauses.push(vec![!clause1[v - 1], !clause2[v - 1]]);
                 }
             }
         }
@@ -60,7 +61,7 @@ fn clauses_from_sudoku(board: &[Vec<u32>]) -> Vec<Vec<Lit>> {
                 let clause1 = cell_to_lits.get(&(r, c1)).unwrap();
                 let clause2 = cell_to_lits.get(&(r, c2)).unwrap();
                 for v in 1..=n {
-                    clauses.push(vec![clause1[v - 1].neg(), clause2[v - 1].neg()]);
+                    clauses.push(vec![!clause1[v - 1], !clause2[v - 1]]);
                 }
             }
         }
@@ -87,7 +88,7 @@ fn clauses_from_sudoku(board: &[Vec<u32>]) -> Vec<Vec<Lit>> {
                     let clause1 = cell_to_lits.get(&(r1, c1)).unwrap();
                     let clause2 = cell_to_lits.get(&(r2, c2)).unwrap();
                     for v in 1..=9 {
-                        clauses.push(vec![clause1[v - 1].neg(), clause2[v - 1].neg()]);
+                        clauses.push(vec![!clause1[v - 1], !clause2[v - 1]]);
                     }
                 }
             }
@@ -139,7 +140,7 @@ fn board_from_assign(n: usize, assigns: &[bool]) -> Vec<Vec<u32>> {
     for y in 0..n {
         for x in 0..n {
             for v in 1..=n {
-                let var = lit_from_pos_and_val(n, y, x, v).0;
+                let var = lit_from_pos_and_val(n, y, x, v).var().0 as usize;
                 if assigns[var] {
                     board[y][x] = v as u32;
                     break;

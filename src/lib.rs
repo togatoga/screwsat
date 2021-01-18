@@ -35,7 +35,7 @@ pub mod solver {
     impl From<i32> for Lit {
         fn from(x: i32) -> Self {
             assert!(x != 0);
-            let d = x.abs() as u32;
+            let d = x.abs() as u32 - 1;
             if x > 0 {
                 Lit(2 * d)
             } else {
