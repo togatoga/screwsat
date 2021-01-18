@@ -1,21 +1,67 @@
 pub mod solver {
 
     use std::{
-        collections::{BTreeSet, HashMap, HashSet, VecDeque},
+        cell::RefCell,
+        collections::{HashSet, VecDeque},
+        ops::{Index, IndexMut},
+        rc::{Rc, Weak},
         time::{Duration, Instant},
         vec,
     };
-    /// A boolean variable
-    pub type Var = usize;
-    /// A literal is either a variable or a negation of a variable.
-    /// (0, true) means x0 and (0, false) means ¬x0.
-    pub type Lit = (Var, bool);
-    pub trait Negation {
-        fn neg(self) -> Self;
+
+    #[derive(Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
+    pub struct Var(u32);
+
+    #[derive(Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
+    pub struct Lit(u32);
+    impl Lit {
+        fn new(var: Var, positive: bool) -> Lit {
+            Lit(if positive { 2 * var.0 } else { 2 * var.0 + 1 })
+        }
+        fn var(self) -> Var {
+            Var(self.0 >> 1)
+        }
+        fn pos(&self) -> bool {
+            if self.0 & 1 == 0 {
+                true
+            } else {
+                false
+            }
+        }
+        fn neg(&self) -> bool {
+            !self.pos()
+        }
     }
-    impl Negation for Lit {
-        fn neg(self) -> Self {
-            (self.0, !self.1)
+    impl From<i32> for Lit {
+        fn from(x: i32) -> Self {
+            assert!(x != 0);
+            let d = x.abs() as u32;
+            if x > 0 {
+                Lit(2 * d)
+            } else {
+                Lit(2 * d + 1)
+            }
+        }
+    }
+    impl std::ops::Not for Lit {
+        type Output = Self;
+        fn not(self) -> Self::Output {
+            if self.pos() {
+                Lit(self.0 + 1)
+            } else {
+                Lit(self.0 - 1)
+            }
+        }
+    }
+
+    pub type Clause = Vec<Lit>;
+
+    #[derive(Debug, Default, PartialEq, Eq, PartialOrd, Ord, Clone)]
+    struct CRef(Rc<RefCell<Clause>>);
+    pub type CWRef = Weak<RefCell<Clause>>;
+    impl CRef {
+        fn new(clause: Clause) -> CRef {
+            CRef(Rc::new(RefCell::new(clause)))
         }
     }
 
@@ -29,6 +75,37 @@ pub mod solver {
         Unsat,
         Indeterminate,
     }
+    #[derive(PartialEq, Debug, Copy, Clone)]
+    enum LitBool {
+        True,
+        False,
+        Undef,
+    }
+    impl<T> Index<Var> for Vec<T> {
+        type Output = T;
+
+        fn index(&self, var: Var) -> &Self::Output {
+            &self[var.0 as usize]
+        }
+    }
+    impl<T> IndexMut<Var> for Vec<T> {
+        fn index_mut(&mut self, var: Var) -> &mut Self::Output {
+            &mut self[var.0 as usize]
+        }
+    }
+
+    impl<T> Index<Lit> for Vec<T> {
+        type Output = T;
+
+        fn index(&self, lit: Lit) -> &Self::Output {
+            &self[lit.var()]
+        }
+    }
+    impl<T> IndexMut<Lit> for Vec<T> {
+        fn index_mut(&mut self, lit: Lit) -> &mut Self::Output {
+            &mut self[lit.var()]
+        }
+    }
 
     #[derive(Debug, Default)]
     // A SAT Solver
@@ -37,18 +114,18 @@ pub mod solver {
         n: usize,
         // assignments for each variable
         pub assigns: Vec<bool>,
-        // all clauses(original + learnt)
-        clauses: Vec<Vec<Lit>>,
+        // original clauses
+        clauses: Vec<CRef>,
+        // learnt clauses
+        learnts: Vec<CRef>,
         // clauses that may be conflicted or propagated if a `lit` is false.
-        watchers: HashMap<Lit, Vec<usize>>,
+        watchers: Vec<Vec<CWRef>>,
         // a clause index represents that a variable is forced to be assigned.
-        reason: Vec<Option<usize>>,
+        reason: Vec<Option<CWRef>>,
         // decision level(0: unassigned, 1: minimum level)
         level: Vec<usize>,
-        // variables aren't assigned yet.
-        unselected_vars: BTreeSet<Var>,
         // assigned variables
-        que: VecDeque<Var>,
+        que: VecDeque<Lit>,
         // the head index of `que` points unprocessed elements
         head: usize,
         // the solver status. this value may be set by the functions `add_clause` and `solve`.
@@ -56,54 +133,71 @@ pub mod solver {
     }
 
     impl Solver {
+        fn eval(&self, lit: Lit) -> LitBool {
+            if self.level[lit.var()] == 0 {
+                return LitBool::Undef;
+            }
+            if lit.pos() {
+                if self.assigns[lit.var()] {
+                    LitBool::True
+                } else {
+                    LitBool::False
+                }
+            } else {
+                if self.assigns[lit.var()] {
+                    LitBool::False
+                } else {
+                    LitBool::True
+                }
+            }
+        }
         /// Enqueue a variable to assign a `value` to a boolean `assign`
-        fn enqueue(&mut self, var: Var, assign: bool, reason: Option<usize>) {
-            debug_assert!(self.level[var] == 0);
-            debug_assert!(self.unselected_vars.contains(&var));
-            self.unselected_vars.remove(&var);
-            self.assigns[var] = assign;
-            self.reason[var] = reason;
-            self.level[var] = if let Some(last) = self.que.back() {
-                self.level[*last]
+        fn enqueue(&mut self, lit: Lit, reason: Option<CRef>) {
+            debug_assert!(self.level[lit.var()] == 0);
+            self.assigns[lit.var()] = lit.pos();
+            self.reason[lit.var()] = reason.and_then(|cr: CRef| Some(Rc::downgrade(&cr.0)));
+            self.level[lit.var()] = if let Some(last) = self.que.back() {
+                self.level[last.var()]
             } else {
                 1
             };
-            self.que.push_back(var);
+            self.que.push_back(lit);
         }
 
         // Create a new space for one variable.
         pub fn new_var(&mut self) {
-            self.unselected_vars.insert(self.n);
             self.n += 1;
             self.assigns.push(false);
             self.reason.push(None);
             self.level.push(0);
+            // for literals
+            self.watchers.push(Vec::new());
+            self.watchers.push(Vec::new());
         }
 
         /// This method is only for internal usage and almost same as `add_clause`
         /// But, this method doesn't grow the size of array.
-        fn add_clause_unchecked(&mut self, clause: &[Lit]) {
+        fn add_clause_unchecked(&mut self, cr: CRef, learnt: bool) {
+            let clause = cr.0.borrow();
             debug_assert!(clause.len() >= 2);
-            let clause_idx = self.clauses.len();
-            self.watchers
-                .entry(clause[0].neg())
-                .or_insert_with(Vec::new)
-                .push(clause_idx);
-            self.watchers
-                .entry(clause[1].neg())
-                .or_insert_with(Vec::new)
-                .push(clause_idx);
+            //let cr = Rc::new(RefCell::new(clause));
 
-            self.clauses.push(clause.to_vec());
+            self.watchers[!clause[0]].push(Rc::downgrade(&cr.0));
+            self.watchers[!clause[1]].push(Rc::downgrade(&cr.0));
+            if learnt {
+                self.learnts.push(cr.clone());
+            } else {
+                self.clauses.push(cr.clone());
+            }
         }
         /// Add a new clause to `clauses` and watch a clause.
         /// If a variable is greater than the size of array, grow it.
         /// # Arguments
         /// * `clause` - a clause has one or some literal variables
-        pub fn add_clause(&mut self, clause: &[Lit]) {
+        pub fn add_clause(&mut self, clause: &Clause) {
             // grow the space of array variables.
             clause.iter().for_each(|c| {
-                while c.0 >= self.assigns.len() {
+                while c.var().0 as usize >= self.assigns.len() {
                     self.new_var();
                 }
             });
@@ -117,7 +211,7 @@ pub mod solver {
                 if i >= 1 {
                     // x0 v !x0 means a clause is already satisfied.
                     // you don't need to add it.
-                    if clause[i] == clause[i - 1].neg() {
+                    if clause[i] == !clause[i - 1] {
                         return;
                     }
                     // x0 v x0 duplicated
@@ -127,14 +221,16 @@ pub mod solver {
                 }
                 let lit = clause[i];
                 //already assigned
-                if self.level[lit.0] > 0 {
-                    // a clause is already satisfied. You don't need to add it.
-                    if self.assigns[lit.0] == lit.1 {
+                match self.eval(lit) {
+                    LitBool::True => {
+                        // a clause is already satisfied. You don't need to add it.
                         return;
-                    } else {
+                    }
+                    LitBool::False => {
                         // a literal is already false. You can remove it from a clause.
                         remove = true;
                     }
+                    _ => {}
                 }
 
                 if !remove {
@@ -151,60 +247,49 @@ pub mod solver {
                 // Unit Clause
                 let c = clause[0];
                 // already assigned
-                if self.level[c.0] > 0 {
-                    if self.assigns[c.0] != c.1 {
-                        self.status = Some(Status::Unsat);
-                    }
-                    return;
+                if self.eval(c) == LitBool::False {
+                    self.status = Some(Status::Unsat);
                 }
-                self.enqueue(c.0, c.1, None);
+                self.enqueue(c, None);
                 // If the conflict happnes at the root level(decision level: 0), which means that a given problem is UNSATISFIABLE.
                 if self.propagate().is_some() {
                     self.status = Some(Status::Unsat);
                 }
             } else {
                 debug_assert!(clause.len() >= 2);
-                let clause_idx = self.clauses.len();
-                self.watchers
-                    .entry(clause[0].neg())
-                    .or_insert_with(Vec::new)
-                    .push(clause_idx);
-                self.watchers
-                    .entry(clause[1].neg())
-                    .or_insert_with(Vec::new)
-                    .push(clause_idx);
-                self.clauses.push(clause.to_vec());
+                let l1 = clause[0];
+                let l2 = clause[1];
+                let cr = CRef::new(clause);
+
+                self.watchers[!l1].push(Rc::downgrade(&cr.0));
+                self.watchers[!l2].push(Rc::downgrade(&cr.0));
+                self.clauses.push(cr);
             }
         }
 
         /// Propagate it by all enqueued values and check conflicts.
         /// If a conflict is detected, this function returns a conflicted clause index.
         /// `None` is no conflicts.
-        fn propagate(&mut self) -> Option<usize> {
+        fn propagate(&mut self) -> Option<CWRef> {
             let mut conflict = None;
-            let mut update_watchers = VecDeque::new();
+            let mut update_watchers: VecDeque<(Lit, Weak<RefCell<Vec<Lit>>>)> = VecDeque::new();
             'conflict: while self.head < self.que.len() {
                 while let Some((p, cr)) = update_watchers.pop_front() {
-                    self.watchers.entry(p).or_insert_with(Vec::new).push(cr);
+                    self.watchers[p].push(cr);
                 }
-                debug_assert_eq!(conflict, None);
-                let p = {
-                    let v = self.que[self.head];
-                    self.head += 1;
-                    (v, self.assigns[v])
-                };
+                let p = self.que[self.head];
 
-                debug_assert!(self.level[p.0] > 0);
-                let watcher = match self.watchers.get_mut(&p) {
-                    Some(watcher) => watcher,
-                    None => continue,
-                };
-                let false_p = p.neg();
+                debug_assert!(self.level[p.var()] > 0);
+
+                let false_p = !p;
                 let mut idx = 0;
-                'next_clause: while idx < watcher.len() {
-                    debug_assert!(idx < watcher.len());
-                    let cr = watcher[idx];
-                    let clause = &mut self.clauses[cr];
+                'next_clause: while idx < self.watchers[p].len() {
+                    debug_assert!(idx < self.watchers[p].len());
+                    let cwr = self.watchers[p][idx].clone();
+                    assert!(cwr.upgrade().is_some());
+                    let cr = cwr.upgrade().unwrap();
+                    let mut clause = cr.borrow_mut();
+
                     debug_assert!(clause[0] == false_p || clause[1] == false_p);
 
                     // make sure that the clause[1] is the false literal.
@@ -213,7 +298,7 @@ pub mod solver {
                     }
                     let first = clause[0];
                     // already satisfied
-                    if self.level[first.0] > 0 && self.assigns[first.0] == first.1 {
+                    if self.eval(first) == LitBool::True {
                         debug_assert!(first != clause[1]);
                         idx += 1;
                         continue 'next_clause;
@@ -222,29 +307,29 @@ pub mod solver {
                     for k in 2..clause.len() {
                         let lit = clause[k];
                         // Found a literal isn't false(true or undefined)
-                        if self.level[lit.0] == 0 || self.assigns[lit.0] == lit.1 {
+                        if self.eval(lit) != LitBool::Undef {
                             clause.swap(1, k);
 
-                            watcher[idx] = *watcher.last().unwrap();
-                            watcher.pop();
+                            //watcher[idx] = *watcher.last().unwrap();
+                            self.watchers[p][idx] = self.watchers[p].last().unwrap().clone();
+                            self.watchers[p].pop();
 
-                            update_watchers.push_back((clause[1].neg(), cr));
+                            update_watchers.push_back((clause[1], cwr));
                             // NOTE
                             // Don't increase `idx` because you replace and the idx element with the last one.
                             continue 'next_clause;
                         }
                     }
-                    debug_assert_eq!(watcher[idx], cr);
+                    //debug_assert_eq!(watcher[idx], cr);
 
-                    if self.level[first.0] > 0 {
-                        debug_assert!(self.assigns[first.0] != first.1);
+                    if self.eval(first) == LitBool::False {
                         // CONFLICT
                         // a first literal(clause[0]) is false.
                         // clause[1] is a false
                         // clause[2..len] is a false
 
                         self.head = self.que.len();
-                        conflict = Some(cr);
+                        conflict = Some(cwr);
                         break 'conflict;
                     } else {
                         // UNIT PROPAGATION
@@ -252,49 +337,48 @@ pub mod solver {
                         // clause[1] is a false
                         // clause[2..len] is a false
 
-                        let (var, sign) = first;
-                        debug_assert_eq!(self.level[var], 0);
+                        debug_assert_eq!(self.level[first.var()], 0);
                         // NOTE
                         // I don't know how to handle this borrowing problem. Please help me.
                         // self.enqueue(var, sign, Some(cr));
-                        self.unselected_vars.remove(&var);
-                        self.assigns[var] = sign;
-                        self.reason[var] = Some(cr);
-                        self.level[var] = if let Some(last) = self.que.back() {
+
+                        self.assigns[first.var()] = first.pos();
+                        self.reason[first.var()] = Some(cwr);
+                        self.level[first.var()] = if let Some(last) = self.que.back() {
                             self.level[*last]
                         } else {
                             1
                         };
-                        debug_assert!(self.level[var] > 0);
-                        self.que.push_back(var);
+                        debug_assert!(self.level[first.var()] > 0);
+                        self.que.push_back(first);
                     }
                     idx += 1;
                 }
             }
             while let Some((p, cr)) = update_watchers.pop_front() {
-                self.watchers.entry(p).or_insert_with(Vec::new).push(cr);
+                self.watchers[p].push(cr);
             }
 
             conflict
         }
         /// Analyze a conflict clause and deduce a learnt clause to avoid a current conflict
-        fn analyze(&mut self, confl: usize) {
+        fn analyze(&mut self, confl: CWRef) {
             let mut checked_vars = HashSet::new();
             let current_level = self.level[self.que[self.que.len() - 1]];
-            debug_assert!(current_level > 0);
             let mut learnt_clause = vec![];
 
             let mut same_level_cnt = 0;
-
+            assert!(confl.upgrade().is_some());
+            let clause = confl.upgrade().unwrap();
             // implication graph nodes that are start point from a conflict clause.
-            for p in self.clauses[confl].iter() {
-                let (var, _) = *p;
+            for p in clause.borrow().iter() {
+                let var = p.var();
                 debug_assert!(self.level[var] > 0);
                 // already checked
                 if !checked_vars.insert(var) {
                     continue;
                 }
-                debug_assert!(self.level[var] <= current_level);
+                //debug_assert!(self.level[var] <= current_level);
                 if self.level[var] < current_level {
                     learnt_clause.push(*p);
                 } else {
@@ -305,7 +389,8 @@ pub mod solver {
             // Traverse an implication graph to 1-UIP(unique implication point)
             let first_uip = {
                 let mut p = None;
-                for &v in self.que.iter().rev() {
+                for &lit in self.que.iter().rev() {
+                    let v = lit.var();
                     // Skip a variable that isn't checked.
                     if !checked_vars.contains(&v) {
                         continue;
@@ -315,13 +400,16 @@ pub mod solver {
                     same_level_cnt -= 1;
                     // There is no variables that are at the conflict level
                     if same_level_cnt <= 0 {
-                        p = Some(v);
+                        p = Some(lit);
                         break;
                     }
-                    let reason = self.reason[v].unwrap();
-                    debug_assert!(self.clauses[reason][0].0 == v);
-                    for p in self.clauses[reason].iter().skip(1) {
-                        let var = p.0;
+                    assert!(self.reason[v].is_some());
+                    let reason = self.reason[v].as_ref().unwrap();
+                    assert!(reason.upgrade().is_some());
+                    let clause = reason.upgrade().unwrap();
+                    //debug_assert!(self.clauses[reason][0].0 == v);
+                    for p in clause.borrow().iter().skip(1) {
+                        let var = p.var();
                         // already checked
                         if !checked_vars.insert(var) {
                             continue;
@@ -339,7 +427,7 @@ pub mod solver {
 
             // p is 1-UIP.
             let p = first_uip.unwrap();
-            learnt_clause.push((p, !self.assigns[p]));
+            learnt_clause.push(!p);
             let n = learnt_clause.len();
             learnt_clause.swap(0, n - 1);
             debug_assert!(checked_vars.len() == learnt_clause.len());
@@ -348,10 +436,10 @@ pub mod solver {
                 1
             } else {
                 let mut max_idx = 1;
-                let mut max_level = self.level[learnt_clause[max_idx].0];
+                let mut max_level = self.level[learnt_clause[max_idx].var()];
                 for (i, lit) in learnt_clause.iter().enumerate().skip(2) {
-                    if self.level[lit.0] > max_level {
-                        max_level = self.level[lit.0];
+                    if self.level[lit.var()] > max_level {
+                        max_level = self.level[lit.var()];
                         max_idx = i;
                     }
                 }
@@ -363,7 +451,6 @@ pub mod solver {
             // Cancel decisions until the level is less than equal to the backtrack level
             while let Some(p) = self.que.back() {
                 if self.level[*p] > backtrack_level {
-                    self.unselected_vars.insert(*p);
                     self.level[*p] = 0;
                     self.que.pop_back();
                 } else {
@@ -374,16 +461,14 @@ pub mod solver {
             // propagate it by a new learnt clause
             if learnt_clause.len() == 1 {
                 debug_assert_eq!(backtrack_level, 1);
-                self.enqueue(learnt_clause[0].0, learnt_clause[0].1, None);
+                self.enqueue(learnt_clause[0], None);
                 self.head = self.que.len() - 1;
             } else {
-                self.enqueue(
-                    learnt_clause[0].0,
-                    learnt_clause[0].1,
-                    Some(self.clauses.len()),
-                );
+                let first = learnt_clause[0];
+                let cr = CRef::new(learnt_clause);
+                self.enqueue(first, Some(cr.clone()));
                 self.head = self.que.len() - 1;
-                self.add_clause_unchecked(&learnt_clause);
+                self.add_clause_unchecked(cr, true);
             }
         }
         /// Create a new `Solver` struct
@@ -397,18 +482,19 @@ pub mod solver {
                 que: VecDeque::new(),
                 head: 0,
                 clauses: Vec::new(),
+                learnts: Vec::new(),
                 reason: vec![None; n],
                 level: vec![0; n],
-                unselected_vars: (0..n).map(|x| x).collect(),
                 assigns: vec![false; n],
-                watchers: HashMap::new(),
+                watchers: vec![vec![]; 2 * n],
                 status: None,
             };
             clauses.iter().for_each(|clause| {
                 if clause.len() == 1 {
-                    solver.enqueue(clause[0].0, clause[0].1, None);
+                    solver.enqueue(clause[0], None);
                 } else {
-                    solver.add_clause_unchecked(clause);
+                    let cr = CRef::new(clause.clone());
+                    solver.add_clause_unchecked(cr, false);
                 }
             });
             solver
@@ -458,12 +544,11 @@ pub mod solver {
                 } else {
                     // No Conflict
                     // Select a decision variable that isn't decided yet
-                    let nxt_var = self.unselected_vars.iter().next();
+                    let next_lit = None;
 
-                    if let Some(&nxt_var) = nxt_var {
-                        debug_assert_eq!(self.level[nxt_var], 0);
-                        self.enqueue(nxt_var, self.assigns[nxt_var], None);
-                        self.level[nxt_var] += 1;
+                    if let Some(&lit) = next_lit {
+                        self.enqueue(lit, None);
+                        self.level[lit.var()] += 1;
                     } else {
                         // all variables are selected. which means that a formula is satisfied
                         self.status = Some(Status::Sat);
@@ -477,7 +562,7 @@ pub mod solver {
 
 // This mod contains utility functions
 pub mod util {
-    use super::solver::{Lit, Var};
+    use super::solver::{Clause, Lit};
     use std::io::BufRead;
 
     // CnfData is parsed form a input file
@@ -488,7 +573,7 @@ pub mod util {
         // the number of clause
         pub cla_num: Option<usize>,
         // all problem clauses
-        pub clauses: Vec<Vec<Lit>>,
+        pub clauses: Vec<Clause>,
     }
     /// Parse a DIMACAS cnf file
     /// # Arguments
@@ -538,17 +623,7 @@ pub mod util {
                 // skip an empty line
                 continue;
             }
-            let clause: Vec<Lit> = values
-                .iter()
-                .map(|&x| {
-                    let d = x.abs() as Var;
-                    if x > 0 {
-                        (d - 1, true)
-                    } else {
-                        (d - 1, false)
-                    }
-                })
-                .collect();
+            let clause: Vec<Lit> = values.iter().map(|&x| Lit::from(x)).collect();
             clauses.push(clause);
         }
         Ok(CnfData {
