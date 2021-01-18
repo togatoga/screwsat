@@ -750,7 +750,7 @@ pub mod solver {
                 learnts: Vec::new(),
                 reason: vec![None; n],
                 level: vec![0; n],
-                seen: Vec::new(),
+                seen: vec![false; n],
                 assigns: vec![false; n],
                 order_heap: Heap::new(n, 1.0),
                 watchers: vec![vec![]; 2 * n],
