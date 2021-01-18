@@ -108,6 +108,130 @@ pub mod solver {
     }
 
     #[derive(Debug, Default)]
+    struct Heap {
+        heap: Vec<Var>,
+        indices: Vec<Option<usize>>,
+        activity: Vec<f64>,
+        bump_inc: f64,
+    }
+
+    impl Heap {
+        pub fn new(n: usize, bump_inc: f64) -> Heap {
+            Heap {
+                heap: (0..n).map(|x| Var(x as u32)).collect(),
+                indices: (0..n).map(|x| Some(x)).collect(),
+                activity: vec![0.0; n],
+                bump_inc,
+            }
+        }
+        fn gt(&self, left: Var, right: Var) -> bool {
+            self.activity[left] > self.activity[right]
+        }
+        pub fn decay_inc(&mut self) {
+            self.bump_inc *= 1.0 / 0.95;
+        }
+        pub fn bump_activity(&mut self, v: Var) {
+            self.activity[v] += self.bump_inc;
+            if self.activity[v] >= 1e100 {
+                for i in 0..self.activity.len() {
+                    self.activity[i] *= 1e-100;
+                }
+                self.bump_inc *= 1e-100;
+            }
+            if self.in_heap(v) {
+                self.update(v);
+            }
+        }
+
+        fn update(&mut self, v: Var) {
+            if !self.in_heap(v) {
+                self.push(v);
+            } else {
+                let idx = self.indices[v].unwrap();
+                self.up(idx);
+                self.down(idx);
+            }
+        }
+        fn up(&mut self, i: usize) {
+            if i == 0 {
+                return;
+            }
+            let mut idx = i;
+            let x = self.heap[idx];
+            let mut par = (idx - 1) >> 1;
+            while idx != 0 {
+                if !self.gt(x, self.heap[par]) {
+                    break;
+                }
+                self.heap[idx] = self.heap[par];
+                self.indices[self.heap[par]] = Some(idx);
+                idx = par;
+                par = (par - 1) >> 1;
+            }
+            self.heap[idx] = x;
+            self.indices[x] = Some(idx);
+        }
+
+        fn pop(&mut self) -> Option<Var> {
+            if self.heap.len() == 0 {
+                return None;
+            }
+            let x = self.heap[0];
+            self.indices[x] = None;
+            if self.heap.len() > 1 {
+                self.heap[0] = *self.heap.last().unwrap();
+                self.indices[self.heap[0]] = Some(0);
+            }
+            self.heap.pop();
+            if self.heap.len() > 1 {
+                self.down(0);
+            }
+            Some(x)
+        }
+
+        fn down(&mut self, i: usize) {
+            let x = self.heap[i];
+            let mut idx = i;
+            while 2 * idx + 1 < self.heap.len() {
+                let left = 2 * idx + 1;
+                let right = left + 1;
+                let child = if right < self.heap.len() && self.gt(self.heap[right], self.heap[left])
+                {
+                    right
+                } else {
+                    left
+                };
+                if self.gt(self.heap[child], x) {
+                    self.heap[idx] = self.heap[child];
+                    self.indices[self.heap[idx]] = Some(idx);
+                    idx = child;
+                } else {
+                    break;
+                }
+            }
+            self.heap[idx] = x;
+            self.indices[x] = Some(idx);
+        }
+
+        fn push(&mut self, v: Var) {
+            if self.in_heap(v) {
+                return;
+            }
+            while (v.0 as usize) >= self.indices.len() {
+                self.indices.push(None);
+                self.activity.push(0.0);
+            }
+            self.indices[v] = Some(self.heap.len());
+            self.heap.push(v);
+            self.up(self.indices[v].unwrap());
+        }
+
+        fn in_heap(&mut self, v: Var) -> bool {
+            (v.0 as usize) < self.indices.len() && self.indices[v].is_some()
+        }
+    }
+
+    #[derive(Debug, Default)]
     // A SAT Solver
     pub struct Solver {
         // the number of variables
@@ -130,6 +254,7 @@ pub mod solver {
         head: usize,
         // the solver status. this value may be set by the functions `add_clause` and `solve`.
         pub status: Option<Status>,
+        order_heap: Heap,
     }
 
     impl Solver {
@@ -166,10 +291,12 @@ pub mod solver {
 
         // Create a new space for one variable.
         pub fn new_var(&mut self) {
+            let v = Var(self.n as u32);
             self.n += 1;
             self.assigns.push(false);
             self.reason.push(None);
             self.level.push(0);
+            self.order_heap.push(v);
             // for literals
             self.watchers.push(Vec::new());
             self.watchers.push(Vec::new());
@@ -393,6 +520,9 @@ pub mod solver {
         fn pop_queue_until(&mut self, backtrack_level: usize) {
             while let Some(p) = self.que.back() {
                 if self.level[p.var()] > backtrack_level {
+                    if !self.order_heap.in_heap(p.var()) {
+                        self.order_heap.push(p.var());
+                    }
                     self.reason[p.var()] = None;
                     self.level[p.var()] = 0;
                     self.que.pop_back();
@@ -406,6 +536,7 @@ pub mod solver {
                 self.head = self.que.len() - 1;
             }
         }
+
         /// Analyze a conflict clause and deduce a learnt clause to avoid a current conflict
         fn analyze(&mut self, confl: CWRef) {
             let mut checked_vars = HashSet::new();
@@ -419,6 +550,7 @@ pub mod solver {
             for p in clause.borrow().iter() {
                 let var = p.var();
                 debug_assert!(self.level[var] > 0);
+                self.order_heap.bump_activity(var);
                 // already checked
                 if !checked_vars.insert(var) {
                     continue;
@@ -436,11 +568,12 @@ pub mod solver {
                 let mut p = None;
                 for &lit in self.que.iter().rev() {
                     let v = lit.var();
+
                     // Skip a variable that isn't checked.
                     if !checked_vars.contains(&v) {
                         continue;
                     }
-
+                    self.order_heap.bump_activity(v);
                     debug_assert_eq!(self.level[v], current_level);
                     same_level_cnt -= 1;
                     // There is no variables that are at the conflict level
@@ -522,6 +655,7 @@ pub mod solver {
                 reason: vec![None; n],
                 level: vec![0; n],
                 assigns: vec![false; n],
+                order_heap: Heap::new(n, 1.0),
                 watchers: vec![vec![]; 2 * n],
                 status: None,
             };
@@ -583,6 +717,7 @@ pub mod solver {
                     }
                     conflict_cnt += 1;
                     self.analyze(confl);
+                    self.order_heap.decay_inc();
                 } else {
                     // No Conflict
                     if conflict_cnt as f64 >= restart_limit {
@@ -596,19 +731,21 @@ pub mod solver {
                     }
 
                     // Select a decision variable that isn't decided yet
-                    let next_lit = self
-                        .level
-                        .iter()
-                        .position(|l| *l == 0)
-                        .and_then(|x| Some(Lit::new(Var(x as u32), self.assigns[x])));
+                    loop {
+                        if let Some(v) = self.order_heap.pop() {
+                            if self.level[v] != 0 {
+                                continue;
+                            }
 
-                    if let Some(lit) = next_lit {
-                        self.enqueue(lit, None);
-                        self.level[lit.var()] += 1;
-                    } else {
-                        // all variables are selected. which means that a formula is satisfied
-                        self.status = Some(Status::Sat);
-                        return Status::Sat;
+                            let lit = Lit::new(v, self.assigns[v]);
+                            self.enqueue(lit, None);
+                            self.level[lit.var()] += 1;
+                            break;
+                        } else {
+                            // all variables are selected. which means that a formula is satisfied
+                            self.status = Some(Status::Sat);
+                            return Status::Sat;
+                        }
                     }
                 }
             }
