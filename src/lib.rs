@@ -58,7 +58,7 @@ pub mod solver {
 
     #[derive(Debug, Default, PartialEq, Eq, PartialOrd, Ord, Clone)]
     struct CRef(Rc<RefCell<Clause>>);
-    pub type CWRef = Weak<RefCell<Clause>>;
+    type CWRef = Weak<RefCell<Clause>>;
     impl CRef {
         fn new(clause: Clause) -> CRef {
             CRef(Rc::new(RefCell::new(clause)))
@@ -338,18 +338,7 @@ pub mod solver {
                         // NOTE
                         // I don't know how to handle this borrowing problem. Please help me.
                         // self.enqueue(var, sign, Some(cr));
-
-                        self.assigns[first.var()] = first.pos();
-                        self.reason[first.var()] = Some(cwr);
-                        self.level[first.var()] = if let Some(last) = self.que.back() {
-                            self.level[last.var()]
-                        } else {
-                            1
-                        };
-                        //eprintln!("{}", self.level[first.var()]);
-                        //eprintln!("{}", self.level[*self.que.back().unwrap()]);
-                        debug_assert!(self.level[first.var()] > 0);
-                        self.que.push_back(first);
+                        self.enqueue(first, Some(CRef(cr.clone())));
                     }
                     idx += 1;
                 }
