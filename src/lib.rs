@@ -22,11 +22,7 @@ pub mod solver {
             Var(self.0 >> 1)
         }
         pub fn pos(&self) -> bool {
-            if self.0 & 1 == 0 {
-                true
-            } else {
-                false
-            }
+            self.0 & 1 == 0
         }
         pub fn neg(&self) -> bool {
             !self.pos()
@@ -46,11 +42,7 @@ pub mod solver {
     impl std::ops::Not for Lit {
         type Output = Self;
         fn not(self) -> Self::Output {
-            if self.pos() {
-                Lit(self.0 + 1)
-            } else {
-                Lit(self.0 - 1)
-            }
+            Lit(self.0 ^ 1)
         }
     }
 
@@ -128,7 +120,7 @@ pub mod solver {
         pub fn new(n: usize, bump_inc: f64) -> Heap {
             Heap {
                 heap: (0..n).map(|x| Var(x as u32)).collect(),
-                indices: (0..n).map(|x| Some(x)).collect(),
+                indices: (0..n).map(Some).collect(),
                 activity: vec![0.0; n],
                 bump_inc,
             }
@@ -137,8 +129,9 @@ pub mod solver {
         fn gt(&self, left: Var, right: Var) -> bool {
             self.activity[left] > self.activity[right]
         }
+        #[allow(dead_code)]
         fn top(self) -> Option<Var> {
-            if self.heap.len() == 0 {
+            if self.heap.is_empty() {
                 return None;
             }
             Some(self.heap[0])
@@ -156,10 +149,11 @@ pub mod solver {
                 self.bump_inc *= 1e-100;
             }
             if self.in_heap(v) {
-                self.update(v);
+                let idx = self.indices[v].unwrap();
+                self.up(idx);
             }
         }
-
+        #[allow(dead_code)]
         fn update(&mut self, v: Var) {
             if !self.in_heap(v) {
                 self.push(v);
@@ -193,7 +187,7 @@ pub mod solver {
         }
 
         fn pop(&mut self) -> Option<Var> {
-            if self.heap.len() == 0 {
+            if self.heap.is_empty() {
                 return None;
             }
             let x = self.heap[0];
@@ -283,17 +277,20 @@ pub mod solver {
             if self.level[lit.var()] == 0 {
                 return LitBool::Undef;
             }
-            if lit.pos() {
-                if self.assigns[lit.var()] {
-                    LitBool::True
-                } else {
-                    LitBool::False
+            match self.assigns[lit.var()] {
+                true => {
+                    if lit.pos() {
+                        LitBool::True
+                    } else {
+                        LitBool::False
+                    }
                 }
-            } else {
-                if self.assigns[lit.var()] {
-                    LitBool::False
-                } else {
-                    LitBool::True
+                false => {
+                    if lit.neg() {
+                        LitBool::True
+                    } else {
+                        LitBool::False
+                    }
                 }
             }
         }
@@ -301,7 +298,7 @@ pub mod solver {
         fn enqueue(&mut self, lit: Lit, reason: Option<CRef>) {
             debug_assert!(self.level[lit.var()] == 0);
             self.assigns[lit.var()] = lit.pos();
-            self.reason[lit.var()] = reason.and_then(|cr: CRef| Some(Rc::downgrade(&cr.0)));
+            self.reason[lit.var()] = reason.map(|cr: CRef| Rc::downgrade(&cr.0));
             self.level[lit.var()] = if let Some(last) = self.que.back() {
                 self.level[last.var()]
             } else {
@@ -342,7 +339,7 @@ pub mod solver {
         /// If a variable is greater than the size of array, grow it.
         /// # Arguments
         /// * `clause` - a clause has one or some literal variables
-        pub fn add_clause(&mut self, clause: &Clause) {
+        pub fn add_clause(&mut self, clause: &[Lit]) {
             // grow the space of array variables.
             clause.iter().for_each(|c| {
                 while c.var().0 as usize >= self.assigns.len() {
@@ -425,7 +422,6 @@ pub mod solver {
                 self.head += 1;
                 debug_assert!(self.level[p.var()] > 0);
 
-                let false_p = !p;
                 let mut idx = 0;
 
                 'next_clause: while idx < self.watchers[p].len() {
@@ -438,10 +434,10 @@ pub mod solver {
                     debug_assert!(Rc::strong_count(&cr) == 2);
                     let mut clause = cr.borrow_mut();
 
-                    debug_assert!(clause[0] == false_p || clause[1] == false_p);
+                    debug_assert!(clause[0] == !p || clause[1] == !p);
 
                     // make sure that the clause[1] is the false literal.
-                    if clause[0] == false_p {
+                    if clause[0] == !p {
                         clause.swap(0, 1);
                     }
                     let first = clause[0];
@@ -475,7 +471,6 @@ pub mod solver {
                         // clause[1] is a false
                         // clause[2..len] is a false
 
-                        self.head = self.que.len();
                         conflict = Some(cwr);
                         break 'conflict;
                     } else {
@@ -525,8 +520,9 @@ pub mod solver {
         fn reduce_learnts(&mut self) {
             self.learnts.sort_by_key(|x| x.0.borrow_mut().len());
             let mut new_size = self.learnts.len() / 2;
+            let m = new_size;
             let n: usize = self.learnts.len();
-            for i in new_size..n {
+            for i in m..n {
                 let cr = self.learnts[i].clone();
                 let cwr = Rc::downgrade(&cr.0);
                 if cr.0.borrow().len() > 2 && !self.locked(&cwr) {
