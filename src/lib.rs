@@ -75,26 +75,48 @@ pub mod solver {
     }
     impl<T> Index<Var> for Vec<T> {
         type Output = T;
-
+        #[inline]
         fn index(&self, var: Var) -> &Self::Output {
+            #[cfg(feature = "unsafe")]
+            unsafe {
+                self.get_unchecked(var.0 as usize)
+            }
+            #[cfg(not(feature = "unsafe"))]
             &self[var.0 as usize]
         }
     }
     impl<T> IndexMut<Var> for Vec<T> {
+        #[inline]
         fn index_mut(&mut self, var: Var) -> &mut Self::Output {
+            #[cfg(feature = "unsafe")]
+            unsafe {
+                self.get_unchecked_mut(var.0 as usize)
+            }
+            #[cfg(not(feature = "unsafe"))]
             &mut self[var.0 as usize]
         }
     }
 
     impl<T> Index<Lit> for Vec<T> {
         type Output = T;
-
+        #[inline]
         fn index(&self, lit: Lit) -> &Self::Output {
+            #[cfg(feature = "unsafe")]
+            unsafe {
+                &self.get_unchecked(lit.0 as usize)
+            }
+            #[cfg(not(feature = "unsafe"))]
             &self[lit.0 as usize]
         }
     }
     impl<T> IndexMut<Lit> for Vec<T> {
+        #[inline]
         fn index_mut(&mut self, lit: Lit) -> &mut Self::Output {
+            #[cfg(feature = "unsafe")]
+            unsafe {
+                self.get_unchecked_mut(lit.0 as usize)
+            }
+            #[cfg(not(feature = "unsafe"))]
             &mut self[lit.0 as usize]
         }
     }
