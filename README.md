@@ -2,7 +2,7 @@
 
 [![Crates.io](https://img.shields.io/crates/v/screwsat)](https://crates.io/crates/screwsat)
 
-A very simple CDCL(Conflict-Driven-Clause-Learning) SAT Solver in `Rust`. The total line of `solver` is around `400` lines.  
+A simple CDCL(Conflict-Driven-Clause-Learning) SAT Solver in `Rust`.  
 I wrote it very simple to help people(including me) understand the inside of SAT Solver.  
 
 
@@ -89,7 +89,7 @@ Copy `src/lib.rs` and Paste it. (Competitive Programming Style)
 ```rust
 use std::vec;
 
-use screwsat::solver::Solver;
+use screwsat::solver::*;
 use screwsat::util;
 fn main() {
     {
@@ -98,11 +98,11 @@ fn main() {
         // A problem is (x1 v ¬x5 v x4) ∧ (¬x1 v x5 v x3 v x4) ∧ (x3 v x4)
         let clauses = vec![
             // (x1 v ¬x5 v x4)
-            vec![(0, true), (4, false), (3, true)],
+            vec![Lit::from(1), Lit::from(-5), Lit::from(4)],
             // (¬x1 v x5 v x3 v x4)
-            vec![(0, false), (4, true), (2, true), (3, true)],
+            vec![Lit::from(-1), Lit::from(5), Lit::from(3), Lit::from(4)],
             // (x3 v x4)
-            vec![(2, true), (3, true)],
+            vec![Lit::from(3), Lit::from(4)],
         ];
         // Add clauses to solver
         clauses
@@ -164,6 +164,7 @@ fn main() {
         println!("{:?}", status);
     }
 }
+
 ```
 
 ### Appreciation

@@ -4,7 +4,7 @@ use std::collections::HashMap;
 fn lit_from_pos_and_val(n: usize, y: usize, x: usize, val: usize) -> Lit {
     // x_y_x_v
 
-    Lit::new(Var((n * n * y + n * x + (val - 1)) as u32), true)
+    Lit::new((n * n * y + n * x + (val - 1)) as u32, true)
 }
 /// n by n Sudoku
 /// Sudoku Condition:

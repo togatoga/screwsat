@@ -15,8 +15,8 @@ pub mod solver {
     #[derive(Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
     pub struct Lit(u32);
     impl Lit {
-        pub fn new(var: Var, positive: bool) -> Lit {
-            Lit(if positive { 2 * var.0 } else { 2 * var.0 + 1 })
+        pub fn new(var: u32, positive: bool) -> Lit {
+            Lit(if positive { var << 1 } else { (var << 1) + 1 })
         }
         pub fn var(self) -> Var {
             Var(self.0 >> 1)
@@ -839,7 +839,7 @@ pub mod solver {
                                 continue;
                             }
 
-                            let lit = Lit::new(v, self.assigns[v]);
+                            let lit = Lit::new(v.0, self.assigns[v]);
                             self.enqueue(lit, None);
                             self.level[lit.var()] += 1;
                             break;
