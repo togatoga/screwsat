@@ -2,7 +2,7 @@ pub mod solver {
 
     use std::{
         cell::RefCell,
-        collections::{HashSet, VecDeque},
+        collections::VecDeque,
         ops::{Index, IndexMut},
         rc::{Rc, Weak},
         time::{Duration, Instant},
@@ -260,6 +260,7 @@ pub mod solver {
         watchers: Vec<Vec<CWRef>>,
         // a clause index represents that a variable is forced to be assigned.
         reason: Vec<Option<CWRef>>,
+        seen: Vec<bool>,
         // decision level(0: unassigned, 1: minimum level)
         level: Vec<usize>,
         // assigned variables
@@ -315,6 +316,7 @@ pub mod solver {
             self.reason.push(None);
             self.level.push(0);
             self.order_heap.push(v);
+            self.seen.push(false);
             // for literals
             self.watchers.push(Vec::new());
             self.watchers.push(Vec::new());
@@ -605,7 +607,6 @@ pub mod solver {
 
         /// Analyze a conflict clause and deduce a learnt clause to avoid a current conflict
         fn analyze(&mut self, confl: CWRef) {
-            let mut checked_vars = HashSet::new();
             let current_level = self.level[self.que[self.que.len() - 1].var()];
             let mut learnt_clause = vec![];
 
@@ -618,9 +619,8 @@ pub mod solver {
                 debug_assert!(self.level[var] > 0);
                 self.order_heap.bump_activity(var);
                 // already checked
-                if !checked_vars.insert(var) {
-                    continue;
-                }
+                self.seen[var] = true;
+
                 //debug_assert!(self.level[var] <= current_level);
                 if self.level[var] < current_level {
                     learnt_clause.push(*p);
@@ -636,9 +636,10 @@ pub mod solver {
                     let v = lit.var();
 
                     // Skip a variable that isn't checked.
-                    if !checked_vars.contains(&v) {
+                    if !self.seen[v] {
                         continue;
                     }
+                    self.seen[v] = false;
                     self.order_heap.bump_activity(v);
                     debug_assert_eq!(self.level[v], current_level);
                     same_level_cnt -= 1;
@@ -647,6 +648,7 @@ pub mod solver {
                         p = Some(lit);
                         break;
                     }
+
                     debug_assert!(self.reason[v].is_some());
                     let reason = self.reason[v].as_ref().unwrap();
                     debug_assert!(reason.upgrade().is_some());
@@ -655,9 +657,10 @@ pub mod solver {
                     for p in clause.borrow().iter().skip(1) {
                         let var = p.var();
                         // already checked
-                        if !checked_vars.insert(var) {
+                        if self.seen[var] {
                             continue;
                         }
+                        self.seen[var] = true;
                         debug_assert!(self.level[var] <= current_level);
                         if self.level[var] < current_level {
                             learnt_clause.push(*p);
@@ -692,6 +695,10 @@ pub mod solver {
                 max_level
             };
 
+            // Clear seen
+            for lit in learnt_clause.iter() {
+                self.seen[lit.var()] = false;
+            }
             // Cancel decisions until the level is less than equal to the backtrack level
             self.pop_queue_until(backtrack_level);
 
@@ -721,6 +728,7 @@ pub mod solver {
                 learnts: Vec::new(),
                 reason: vec![None; n],
                 level: vec![0; n],
+                seen: Vec::new(),
                 assigns: vec![false; n],
                 order_heap: Heap::new(n, 1.0),
                 watchers: vec![vec![]; 2 * n],
