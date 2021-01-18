@@ -107,14 +107,23 @@ pub mod solver {
         }
     }
 
-    #[derive(Debug, Default)]
+    #[derive(Debug, Clone)]
     struct Heap {
         heap: Vec<Var>,
         indices: Vec<Option<usize>>,
         activity: Vec<f64>,
         bump_inc: f64,
     }
-
+    impl Default for Heap {
+        fn default() -> Self {
+            Heap {
+                heap: Vec::default(),
+                indices: Vec::default(),
+                activity: Vec::default(),
+                bump_inc: 1.0,
+            }
+        }
+    }
     impl Heap {
         pub fn new(n: usize, bump_inc: f64) -> Heap {
             Heap {
@@ -124,14 +133,22 @@ pub mod solver {
                 bump_inc,
             }
         }
+
         fn gt(&self, left: Var, right: Var) -> bool {
             self.activity[left] > self.activity[right]
+        }
+        fn top(self) -> Option<Var> {
+            if self.heap.len() == 0 {
+                return None;
+            }
+            Some(self.heap[0])
         }
         pub fn decay_inc(&mut self) {
             self.bump_inc *= 1.0 / 0.95;
         }
         pub fn bump_activity(&mut self, v: Var) {
             self.activity[v] += self.bump_inc;
+
             if self.activity[v] >= 1e100 {
                 for i in 0..self.activity.len() {
                     self.activity[i] *= 1e-100;
@@ -159,13 +176,16 @@ pub mod solver {
             let mut idx = i;
             let x = self.heap[idx];
             let mut par = (idx - 1) >> 1;
-            while idx != 0 {
+            loop {
                 if !self.gt(x, self.heap[par]) {
                     break;
                 }
                 self.heap[idx] = self.heap[par];
                 self.indices[self.heap[par]] = Some(idx);
                 idx = par;
+                if idx == 0 {
+                    break;
+                }
                 par = (par - 1) >> 1;
             }
             self.heap[idx] = x;
@@ -255,6 +275,7 @@ pub mod solver {
         // the solver status. this value may be set by the functions `add_clause` and `solve`.
         pub status: Option<Status>,
         order_heap: Heap,
+        skip_simplify: bool,
     }
 
     impl Solver {
@@ -537,6 +558,53 @@ pub mod solver {
             }
         }
 
+        fn simplify(&mut self) {
+            {
+                let n: usize = self.learnts.len();
+                let mut new_size = 0;
+                for i in 0..n {
+                    let cr = self.learnts[i].clone();
+                    let clause = cr.0.borrow();
+                    let mut satisfied = false;
+                    for &lit in clause.iter() {
+                        if self.eval(lit) == LitBool::True {
+                            self.unwatch_clause(&Rc::downgrade(&cr.0));
+                            satisfied = true;
+                            break;
+                        }
+                    }
+                    drop(clause);
+                    if !satisfied {
+                        self.learnts[new_size] = cr;
+                        new_size += 1;
+                    }
+                }
+                self.learnts.truncate(new_size);
+            }
+            {
+                let n: usize = self.clauses.len();
+                let mut new_size = 0;
+                for i in 0..n {
+                    let cr = self.clauses[i].clone();
+                    let clause = cr.0.borrow();
+                    let mut satisfied = false;
+                    for &lit in clause.iter() {
+                        if self.eval(lit) == LitBool::True {
+                            self.unwatch_clause(&Rc::downgrade(&cr.0));
+                            satisfied = true;
+                            break;
+                        }
+                    }
+                    drop(clause);
+                    if !satisfied {
+                        self.clauses[new_size] = cr;
+                        new_size += 1;
+                    }
+                }
+                self.clauses.truncate(new_size);
+            }
+        }
+
         /// Analyze a conflict clause and deduce a learnt clause to avoid a current conflict
         fn analyze(&mut self, confl: CWRef) {
             let mut checked_vars = HashSet::new();
@@ -632,6 +700,7 @@ pub mod solver {
             // propagate it by a new learnt clause
             if learnt_clause.len() == 1 {
                 debug_assert_eq!(backtrack_level, 1);
+                self.skip_simplify = false;
                 self.enqueue(learnt_clause[0], None);
             } else {
                 let first = learnt_clause[0];
@@ -658,6 +727,7 @@ pub mod solver {
                 order_heap: Heap::new(n, 1.0),
                 watchers: vec![vec![]; 2 * n],
                 status: None,
+                skip_simplify: false,
             };
             clauses.iter().for_each(|clause| {
                 if clause.len() == 1 {
@@ -695,7 +765,7 @@ pub mod solver {
                 return *status;
             }
             let start = Instant::now();
-            let mut max_learnt_clause = self.clauses.len() as f64 * 0.1;
+            let mut max_learnt_clause = self.clauses.len() as f64 * 0.3;
             let mut conflict_cnt = 0;
             let mut restart_limit = 100.0;
 
@@ -723,6 +793,10 @@ pub mod solver {
                     if conflict_cnt as f64 >= restart_limit {
                         restart_limit *= 1.1;
                         self.pop_queue_until(1);
+                        if !self.skip_simplify {
+                            self.simplify();
+                            self.skip_simplify = true;
+                        }
                     }
 
                     if max_learnt_clause as usize <= self.learnts.len() {
