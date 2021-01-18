@@ -11,6 +11,7 @@ I have implemented the core SAT Solver algorithms and techniques in `screwsat`.
 - CDCL(Conflict-Driven-Clause-Learning)
 - Back Jump
 - Two-Literal-Watching
+- VSIDS
 
 The performance of `screwsat` isn't as good as other modern sat solvers.  
 But you can grasp some important points of SAT Solver from `screwsat`(I hope).  
