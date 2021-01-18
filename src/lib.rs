@@ -879,9 +879,8 @@ pub mod util {
     /// 1 -5 4 0
     /// -1 5 3 4 0
     /// -3 -4 0
-    pub fn parse_cnf(input_file: &str) -> std::io::Result<CnfData> {
-        let file = std::fs::File::open(input_file)?;
-        let reader = std::io::BufReader::new(file);
+    pub fn parse_cnf<R: std::io::Read>(input: R) -> std::io::Result<CnfData> {
+        let reader = std::io::BufReader::new(input);
         let mut var_num = None;
         let mut cla_num = None;
         let mut clauses = vec![];

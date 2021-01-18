@@ -70,8 +70,8 @@ fn main() {
     }
     let input_file = &rest_args[0];
     let output_file = rest_args.get(1);
-
-    let mut solver = match util::parse_cnf(&input_file) {
+    let input = std::fs::File::open(input_file).unwrap();
+    let mut solver = match util::parse_cnf(input) {
         Ok(result) => {
             let mut solver = solver::Solver::default();
 

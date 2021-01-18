@@ -70,7 +70,8 @@ mod tests {
 
             if path_str.ends_with(".cnf") {
                 //parse cnf file
-                let cnf = util::parse_cnf(path_str).unwrap();
+                let input = std::fs::File::open(path_str).unwrap();
+                let cnf = util::parse_cnf(input).unwrap();
                 let mut solver = Solver::default();
                 cnf.clauses
                     .iter()

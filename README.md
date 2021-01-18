@@ -135,7 +135,8 @@ fn main() {
         // 1 2 -3 0
         // 1 3 0
         // -1 -2 3 0
-        let cnf = util::parse_cnf("examples/unsat.cnf").unwrap();
+        let input = std::fs::File::open("example/unsat.cnf").unwrap();
+        let cnf = util::parse_cnf(input).unwrap();
         // 3
         let variable_num = cnf.var_num.unwrap();
         // 5
@@ -152,7 +153,8 @@ fn main() {
     {
         // Set the time limitation
         // You might want to set the time limitation for very hard problem
-        let cnf = util::parse_cnf("examples/hard.cnf").unwrap();
+        let input = std::fs::File::open("example/hard.cnf").unwrap();
+        let cnf = util::parse_cnf(input).unwrap();
         let mut solver = Solver::default();
         let clauses = cnf.clauses;
         clauses
