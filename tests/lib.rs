@@ -1,6 +1,7 @@
 #[cfg(test)]
 mod tests {
-    use screwsat::solver::{Lit, Solver, Status};
+    use screwsat::solver::*;
+
     use screwsat::util;
 
     use walkdir::WalkDir;
@@ -8,7 +9,7 @@ mod tests {
         for clause in clauses.iter() {
             let mut satisfied = false;
             for lit in clause {
-                if assigns[lit.0] == lit.1 {
+                if assigns[lit.var().0 as usize] == lit.pos() {
                     satisfied = true;
                     break;
                 }
@@ -28,7 +29,7 @@ mod tests {
         let mut var_num = 0;
         clauses.iter().for_each(|clause| {
             for c in clause.iter() {
-                var_num = std::cmp::max(var_num, c.0 + 1);
+                var_num = std::cmp::max(var_num, c.var().0 + 1);
             }
         });
         writeln!(f, "p cnf {} {}", var_num, clauses.len())?;
@@ -37,10 +38,10 @@ mod tests {
                 .iter()
                 .enumerate()
                 .map(|(i, x)| {
-                    let v = if x.1 {
-                        format!("{}", x.0 + 1)
+                    let v = if x.pos() {
+                        format!("{}", x.var().0 + 1)
                     } else {
-                        format!("-{}", x.0 + 1)
+                        format!("-{}", x.var().0 + 1)
                     };
                     if i == clause.len() - 1 {
                         format!("{} 0", v)

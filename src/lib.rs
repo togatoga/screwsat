@@ -10,25 +10,25 @@ pub mod solver {
     };
 
     #[derive(Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
-    pub struct Var(u32);
+    pub struct Var(pub u32);
 
     #[derive(Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
     pub struct Lit(u32);
     impl Lit {
-        fn new(var: Var, positive: bool) -> Lit {
+        pub fn new(var: Var, positive: bool) -> Lit {
             Lit(if positive { 2 * var.0 } else { 2 * var.0 + 1 })
         }
-        fn var(self) -> Var {
+        pub fn var(self) -> Var {
             Var(self.0 >> 1)
         }
-        fn pos(&self) -> bool {
+        pub fn pos(&self) -> bool {
             if self.0 & 1 == 0 {
                 true
             } else {
                 false
             }
         }
-        fn neg(&self) -> bool {
+        pub fn neg(&self) -> bool {
             !self.pos()
         }
     }
@@ -98,12 +98,12 @@ pub mod solver {
         type Output = T;
 
         fn index(&self, lit: Lit) -> &Self::Output {
-            &self[lit.var()]
+            &self[lit.0 as usize]
         }
     }
     impl<T> IndexMut<Lit> for Vec<T> {
         fn index_mut(&mut self, lit: Lit) -> &mut Self::Output {
-            &mut self[lit.var()]
+            &mut self[lit.0 as usize]
         }
     }
 
@@ -272,13 +272,9 @@ pub mod solver {
         /// `None` is no conflicts.
         fn propagate(&mut self) -> Option<CWRef> {
             let mut conflict = None;
-            let mut update_watchers: VecDeque<(Lit, Weak<RefCell<Vec<Lit>>>)> = VecDeque::new();
             'conflict: while self.head < self.que.len() {
-                while let Some((p, cr)) = update_watchers.pop_front() {
-                    self.watchers[p].push(cr);
-                }
                 let p = self.que[self.head];
-
+                self.head += 1;
                 debug_assert!(self.level[p.var()] > 0);
 
                 let false_p = !p;
@@ -307,14 +303,13 @@ pub mod solver {
                     for k in 2..clause.len() {
                         let lit = clause[k];
                         // Found a literal isn't false(true or undefined)
-                        if self.eval(lit) != LitBool::Undef {
+                        if self.eval(lit) != LitBool::False {
                             clause.swap(1, k);
 
-                            //watcher[idx] = *watcher.last().unwrap();
                             self.watchers[p][idx] = self.watchers[p].last().unwrap().clone();
                             self.watchers[p].pop();
 
-                            update_watchers.push_back((clause[1], cwr));
+                            self.watchers[!clause[1]].push(cwr);
                             // NOTE
                             // Don't increase `idx` because you replace and the idx element with the last one.
                             continue 'next_clause;
@@ -345,18 +340,17 @@ pub mod solver {
                         self.assigns[first.var()] = first.pos();
                         self.reason[first.var()] = Some(cwr);
                         self.level[first.var()] = if let Some(last) = self.que.back() {
-                            self.level[*last]
+                            self.level[last.var()]
                         } else {
                             1
                         };
+                        //eprintln!("{}", self.level[first.var()]);
+                        //eprintln!("{}", self.level[*self.que.back().unwrap()]);
                         debug_assert!(self.level[first.var()] > 0);
                         self.que.push_back(first);
                     }
                     idx += 1;
                 }
-            }
-            while let Some((p, cr)) = update_watchers.pop_front() {
-                self.watchers[p].push(cr);
             }
 
             conflict
@@ -364,7 +358,7 @@ pub mod solver {
         /// Analyze a conflict clause and deduce a learnt clause to avoid a current conflict
         fn analyze(&mut self, confl: CWRef) {
             let mut checked_vars = HashSet::new();
-            let current_level = self.level[self.que[self.que.len() - 1]];
+            let current_level = self.level[self.que[self.que.len() - 1].var()];
             let mut learnt_clause = vec![];
 
             let mut same_level_cnt = 0;
@@ -430,7 +424,7 @@ pub mod solver {
             learnt_clause.push(!p);
             let n = learnt_clause.len();
             learnt_clause.swap(0, n - 1);
-            debug_assert!(checked_vars.len() == learnt_clause.len());
+            //debug_assert!(checked_vars.len() == learnt_clause.len());
 
             let backtrack_level = if learnt_clause.len() == 1 {
                 1
@@ -450,8 +444,8 @@ pub mod solver {
 
             // Cancel decisions until the level is less than equal to the backtrack level
             while let Some(p) = self.que.back() {
-                if self.level[*p] > backtrack_level {
-                    self.level[*p] = 0;
+                if self.level[p.var()] > backtrack_level {
+                    self.level[p.var()] = 0;
                     self.que.pop_back();
                 } else {
                     break;
@@ -535,7 +529,8 @@ pub mod solver {
                 }
                 if let Some(confl) = self.propagate() {
                     //Conflict
-                    let current_level = self.level[*self.que.back().unwrap()];
+
+                    let current_level = self.level[self.que.back().unwrap().var()];
                     if current_level == 1 {
                         self.status = Some(Status::Unsat);
                         return Status::Unsat;
@@ -544,9 +539,13 @@ pub mod solver {
                 } else {
                     // No Conflict
                     // Select a decision variable that isn't decided yet
-                    let next_lit = None;
+                    let next_lit = self
+                        .level
+                        .iter()
+                        .position(|l| *l == 0)
+                        .and_then(|x| Some(Lit::new(Var(x as u32), self.assigns[x])));
 
-                    if let Some(&lit) = next_lit {
+                    if let Some(lit) = next_lit {
                         self.enqueue(lit, None);
                         self.level[lit.var()] += 1;
                     } else {

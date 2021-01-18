@@ -18,7 +18,7 @@ fn main() {
         // Add clauses to solver
         clauses
             .into_iter()
-            .for_each(|clause| solver.add_clause(&clause));
+            .for_each(|clause| solver.add_clause(clause));
 
         let status = solver.solve(None);
         // Sat: A problem is SATISFIABLE.
