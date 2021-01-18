@@ -283,7 +283,9 @@ pub mod solver {
                     debug_assert!(idx < self.watchers[p].len());
                     let cwr = self.watchers[p][idx].clone();
                     assert!(cwr.upgrade().is_some());
+
                     let cr = cwr.upgrade().unwrap();
+                    assert!(Rc::strong_count(&cr) == 2);
                     let mut clause = cr.borrow_mut();
 
                     debug_assert!(clause[0] == false_p || clause[1] == false_p);
@@ -354,6 +356,47 @@ pub mod solver {
             }
 
             conflict
+        }
+        fn locked(&self, cwr: &CWRef) -> bool {
+            let c = cwr.upgrade().unwrap().borrow()[0];
+            if self.eval(c) == LitBool::True {
+                if let Some(reason) = self.reason[c.var()].as_ref() {
+                    return reason.ptr_eq(cwr);
+                }
+            }
+            false
+        }
+        fn unwatch_clause(&mut self, cwr: &CWRef) {
+            let clause = cwr.upgrade().unwrap();
+            for idx in 0..2 {
+                let p = !clause.borrow()[idx];
+                let n = self.watchers[p].len();
+                for i in 0..n {
+                    assert!(self.watchers[p][i].upgrade().is_some());
+                    if self.watchers[p][i].ptr_eq(&cwr) {
+                        self.watchers[p][i] = self.watchers[p].last().unwrap().clone();
+                        self.watchers[p].pop();
+                        break;
+                    }
+                }
+            }
+        }
+        fn reduce_learnts(&mut self) {
+            self.learnts.sort_by_key(|x| x.0.borrow_mut().len());
+            let mut new_size = self.learnts.len() / 2;
+            let n: usize = self.learnts.len();
+            for i in new_size..n {
+                let cr = self.learnts[i].clone();
+                let cwr = Rc::downgrade(&cr.0);
+                if cr.0.borrow().len() > 2 && !self.locked(&cwr) {
+                    self.unwatch_clause(&cwr);
+                } else {
+                    self.learnts[new_size] = cr;
+                    new_size += 1;
+                }
+            }
+
+            self.learnts.truncate(new_size);
         }
         /// Analyze a conflict clause and deduce a learnt clause to avoid a current conflict
         fn analyze(&mut self, confl: CWRef) {
@@ -519,6 +562,8 @@ pub mod solver {
                 return *status;
             }
             let start = Instant::now();
+            let mut max_learnt_clause = self.clauses.len() as f64 * 0.1;
+
             loop {
                 if let Some(time_limit) = time_limit {
                     if start.elapsed() > time_limit {
@@ -538,6 +583,12 @@ pub mod solver {
                     self.analyze(confl);
                 } else {
                     // No Conflict
+                    //eprintln!("{} {}", max_learnt_clause, self.learnts.len());
+                    if max_learnt_clause as usize <= self.learnts.len() {
+                        self.reduce_learnts();
+                        max_learnt_clause *= 1.1;
+                    }
+
                     // Select a decision variable that isn't decided yet
                     let next_lit = self
                         .level
