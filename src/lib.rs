@@ -69,9 +69,18 @@ pub mod solver {
     }
     #[derive(PartialEq, Debug, Copy, Clone)]
     enum LitBool {
-        True,
-        False,
-        Undef,
+        True = 0,
+        False = 1,
+        Undef = 2,
+    }
+    impl From<i8> for LitBool {
+        fn from(x: i8) -> Self {
+            match x {
+                0 => LitBool::True,
+                1 => LitBool::False,
+                _ => LitBool::Undef,
+            }
+        }
     }
     impl<T> Index<Var> for Vec<T> {
         type Output = T;
@@ -300,22 +309,7 @@ pub mod solver {
             if self.level[lit.var()] == 0 {
                 return LitBool::Undef;
             }
-            match self.assigns[lit.var()] {
-                true => {
-                    if lit.pos() {
-                        LitBool::True
-                    } else {
-                        LitBool::False
-                    }
-                }
-                false => {
-                    if lit.neg() {
-                        LitBool::True
-                    } else {
-                        LitBool::False
-                    }
-                }
-            }
+            LitBool::from(self.assigns[lit.var()] as i8 ^ lit.pos() as i8)
         }
         /// Enqueue a variable to assign a `value` to a boolean `assign`
         fn enqueue(&mut self, lit: Lit, reason: Option<CRef>) {
