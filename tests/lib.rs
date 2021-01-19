@@ -5,14 +5,25 @@ mod tests {
     use screwsat::util;
 
     use walkdir::WalkDir;
-    fn sat_model_check(clauses: &[Vec<Lit>], assigns: &[bool]) -> bool {
+    fn sat_model_check(clauses: &[Vec<Lit>], assigns: &[LitBool]) -> bool {
         for clause in clauses.iter() {
             let mut satisfied = false;
             for lit in clause {
-                if assigns[lit.var().0 as usize] == lit.pos() {
-                    satisfied = true;
-                    break;
-                }
+                match assigns[lit.var().0 as usize] {
+                    LitBool::True => {
+                        if lit.pos() {
+                            satisfied = true;
+                            break;
+                        }
+                    }
+                    LitBool::False => {
+                        if lit.neg() {
+                            satisfied = true;
+                            break;
+                        }
+                    }
+                    _ => {}
+                };
             }
             if !satisfied {
                 return false;
