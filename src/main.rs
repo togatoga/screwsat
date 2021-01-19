@@ -1,4 +1,5 @@
 use screwsat::{solver, util};
+use solver::LitBool;
 
 use std::{env, fs::File};
 fn help(msg: Option<&str>) {
@@ -22,7 +23,11 @@ fn print_result<W: std::io::Write>(
                 writeln!(writer, "s SATISFIABLE")?;
             }
             for (v, &b) in solver.assigns.iter().enumerate() {
-                let res = if b { (v + 1) as i32 } else { -((v + 1) as i32) };
+                let res = if b == LitBool::True {
+                    (v + 1) as i32
+                } else {
+                    -((v + 1) as i32)
+                };
                 write!(writer, "{} ", res)?;
             }
             writeln!(writer, "0")?;

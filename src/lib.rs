@@ -68,7 +68,7 @@ pub mod solver {
         Indeterminate,
     }
     #[derive(PartialEq, Debug, Copy, Clone)]
-    enum LitBool {
+    pub enum LitBool {
         True = 0,
         False = 1,
         Undef = 2,
@@ -282,7 +282,8 @@ pub mod solver {
         // the number of variables
         n: usize,
         // assignments for each variable
-        pub assigns: Vec<bool>,
+        pub assigns: Vec<LitBool>,
+        polarity: Vec<bool>,
         // original clauses
         clauses: Vec<CRef>,
         // learnt clauses
@@ -306,15 +307,12 @@ pub mod solver {
 
     impl Solver {
         fn eval(&self, lit: Lit) -> LitBool {
-            if self.level[lit.var()] == 0 {
-                return LitBool::Undef;
-            }
             LitBool::from(self.assigns[lit.var()] as i8 ^ lit.pos() as i8)
         }
         /// Enqueue a variable to assign a `value` to a boolean `assign`
         fn enqueue(&mut self, lit: Lit, reason: Option<CRef>) {
             debug_assert!(self.level[lit.var()] == 0);
-            self.assigns[lit.var()] = lit.pos();
+            self.assigns[lit.var()] = LitBool::from(lit.pos() as i8);
             self.reason[lit.var()] = reason.map(|cr: CRef| Rc::downgrade(&cr.0));
             self.level[lit.var()] = if let Some(last) = self.que.back() {
                 self.level[last.var()]
@@ -328,7 +326,8 @@ pub mod solver {
         pub fn new_var(&mut self) {
             let v = Var(self.n as u32);
             self.n += 1;
-            self.assigns.push(false);
+            self.assigns.push(LitBool::Undef);
+            self.polarity.push(false);
             self.reason.push(None);
             self.level.push(0);
             self.order_heap.push(v);
@@ -560,6 +559,11 @@ pub mod solver {
                     if !self.order_heap.in_heap(p.var()) {
                         self.order_heap.push(p.var());
                     }
+                    self.polarity[p.var()] = match self.assigns[p.var()] {
+                        LitBool::True => true,
+                        _ => false,
+                    };
+                    self.assigns[p.var()] = LitBool::Undef;
                     self.reason[p.var()] = None;
                     self.level[p.var()] = 0;
                     self.que.pop_back();
@@ -745,7 +749,8 @@ pub mod solver {
                 reason: vec![None; n],
                 level: vec![0; n],
                 seen: vec![false; n],
-                assigns: vec![false; n],
+                assigns: vec![LitBool::Undef; n],
+                polarity: vec![false; n],
                 order_heap: Heap::new(n, 1.0),
                 watchers: vec![vec![]; 2 * n],
                 status: None,
@@ -833,7 +838,7 @@ pub mod solver {
                                 continue;
                             }
 
-                            let lit = Lit::new(v.0, self.assigns[v]);
+                            let lit = Lit::new(v.0, self.polarity[v]);
                             self.enqueue(lit, None);
                             self.level[lit.var()] += 1;
                             break;
