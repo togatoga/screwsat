@@ -68,10 +68,19 @@ pub mod solver {
         Indeterminate,
     }
     #[derive(PartialEq, Debug, Copy, Clone)]
-    enum LitBool {
-        True,
-        False,
-        Undef,
+    pub enum LitBool {
+        True = 0,
+        False = 1,
+        Undef = 2,
+    }
+    impl From<i8> for LitBool {
+        fn from(x: i8) -> Self {
+            match x {
+                0 => LitBool::True,
+                1 => LitBool::False,
+                _ => LitBool::Undef,
+            }
+        }
     }
     impl<T> Index<Var> for Vec<T> {
         type Output = T;
@@ -273,7 +282,8 @@ pub mod solver {
         // the number of variables
         n: usize,
         // assignments for each variable
-        pub assigns: Vec<bool>,
+        pub assigns: Vec<LitBool>,
+        polarity: Vec<bool>,
         // original clauses
         clauses: Vec<CRef>,
         // learnt clauses
@@ -297,30 +307,13 @@ pub mod solver {
 
     impl Solver {
         fn eval(&self, lit: Lit) -> LitBool {
-            if self.level[lit.var()] == 0 {
-                return LitBool::Undef;
-            }
-            match self.assigns[lit.var()] {
-                true => {
-                    if lit.pos() {
-                        LitBool::True
-                    } else {
-                        LitBool::False
-                    }
-                }
-                false => {
-                    if lit.neg() {
-                        LitBool::True
-                    } else {
-                        LitBool::False
-                    }
-                }
-            }
+            LitBool::from(self.assigns[lit.var()] as i8 ^ lit.neg() as i8)
         }
         /// Enqueue a variable to assign a `value` to a boolean `assign`
         fn enqueue(&mut self, lit: Lit, reason: Option<CRef>) {
             debug_assert!(self.level[lit.var()] == 0);
-            self.assigns[lit.var()] = lit.pos();
+            self.assigns[lit.var()] = LitBool::from(lit.neg() as i8);
+
             self.reason[lit.var()] = reason.map(|cr: CRef| Rc::downgrade(&cr.0));
             self.level[lit.var()] = if let Some(last) = self.que.back() {
                 self.level[last.var()]
@@ -334,7 +327,8 @@ pub mod solver {
         pub fn new_var(&mut self) {
             let v = Var(self.n as u32);
             self.n += 1;
-            self.assigns.push(false);
+            self.assigns.push(LitBool::Undef);
+            self.polarity.push(false);
             self.reason.push(None);
             self.level.push(0);
             self.order_heap.push(v);
@@ -566,6 +560,11 @@ pub mod solver {
                     if !self.order_heap.in_heap(p.var()) {
                         self.order_heap.push(p.var());
                     }
+                    self.polarity[p.var()] = match self.assigns[p.var()] {
+                        LitBool::True => true,
+                        _ => false,
+                    };
+                    self.assigns[p.var()] = LitBool::Undef;
                     self.reason[p.var()] = None;
                     self.level[p.var()] = 0;
                     self.que.pop_back();
@@ -590,7 +589,12 @@ pub mod solver {
                     let mut satisfied = false;
                     for &lit in clause.iter() {
                         if self.eval(lit) == LitBool::True {
-                            self.unwatch_clause(&Rc::downgrade(&cr.0));
+                            let cwr = Rc::downgrade(&cr.0);
+                            self.unwatch_clause(&cwr);
+                            if self.locked(&cwr) {
+                                debug_assert!(self.reason[clause[0].var()].is_some());
+                                self.reason[clause[0].var()] = None;
+                            }
                             satisfied = true;
                             break;
                         }
@@ -612,7 +616,12 @@ pub mod solver {
                     let mut satisfied = false;
                     for &lit in clause.iter() {
                         if self.eval(lit) == LitBool::True {
-                            self.unwatch_clause(&Rc::downgrade(&cr.0));
+                            let cwr = Rc::downgrade(&cr.0);
+                            self.unwatch_clause(&cwr);
+                            if self.locked(&cwr) {
+                                debug_assert!(self.reason[clause[0].var()].is_some());
+                                self.reason[clause[0].var()] = None;
+                            }
                             satisfied = true;
                             break;
                         }
@@ -699,7 +708,31 @@ pub mod solver {
             learnt_clause.push(!p);
             let n = learnt_clause.len();
             learnt_clause.swap(0, n - 1);
-            //debug_assert!(checked_vars.len() == learnt_clause.len());
+
+            let analyze_clear = learnt_clause.clone();
+            // Simplify conflict clauses
+            {
+                let mut new_size = 1;
+                for i in 1..n {
+                    let x = learnt_clause[i].var();
+                    if let Some(cwref) = self.reason[x].as_ref() {
+                        let cr = cwref.upgrade().unwrap();
+                        let clause = cr.borrow();
+                        for lit in clause.iter().skip(1) {
+                            if !self.seen[lit.var()] && self.level[lit.var()] > 1 {
+                                learnt_clause[new_size] = learnt_clause[i];
+                                new_size += 1;
+                                break;
+                            }
+                        }
+                    } else {
+                        learnt_clause[new_size] = learnt_clause[i];
+                        new_size += 1;
+                    }
+                }
+
+                learnt_clause.truncate(new_size);
+            }
 
             let backtrack_level = if learnt_clause.len() == 1 {
                 1
@@ -717,10 +750,6 @@ pub mod solver {
                 max_level
             };
 
-            // Clear seen
-            for lit in learnt_clause.iter() {
-                self.seen[lit.var()] = false;
-            }
             // Cancel decisions until the level is less than equal to the backtrack level
             self.pop_queue_until(backtrack_level);
 
@@ -734,6 +763,11 @@ pub mod solver {
                 let cr = CRef::new(learnt_clause);
                 self.enqueue(first, Some(cr.clone()));
                 self.add_clause_unchecked(cr, true);
+            }
+
+            // Clear seen
+            for lit in analyze_clear {
+                self.seen[lit.var()] = false;
             }
         }
         /// Create a new `Solver` struct
@@ -751,7 +785,8 @@ pub mod solver {
                 reason: vec![None; n],
                 level: vec![0; n],
                 seen: vec![false; n],
-                assigns: vec![false; n],
+                assigns: vec![LitBool::Undef; n],
+                polarity: vec![false; n],
                 order_heap: Heap::new(n, 1.0),
                 watchers: vec![vec![]; 2 * n],
                 status: None,
@@ -839,7 +874,7 @@ pub mod solver {
                                 continue;
                             }
 
-                            let lit = Lit::new(v.0, self.assigns[v]);
+                            let lit = Lit::new(v.0, self.polarity[v]);
                             self.enqueue(lit, None);
                             self.level[lit.var()] += 1;
                             break;

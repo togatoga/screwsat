@@ -135,13 +135,13 @@ fn print_sudoku(board: &[Vec<u32>], colored: &[Vec<u32>]) {
     println!();
 }
 
-fn board_from_assign(n: usize, assigns: &[bool]) -> Vec<Vec<u32>> {
+fn board_from_assign(n: usize, assigns: &[LitBool]) -> Vec<Vec<u32>> {
     let mut board = vec![vec![0; n]; n];
     for y in 0..n {
         for x in 0..n {
             for v in 1..=n {
                 let var = lit_from_pos_and_val(n, y, x, v).var().0 as usize;
-                if assigns[var] {
+                if assigns[var] == LitBool::True {
                     board[y][x] = v as u32;
                     break;
                 }
