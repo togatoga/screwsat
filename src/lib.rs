@@ -307,12 +307,41 @@ pub mod solver {
 
     impl Solver {
         fn eval(&self, lit: Lit) -> LitBool {
-            LitBool::from(self.assigns[lit.var()] as i8 ^ lit.pos() as i8)
+            /*if self.level[lit.var()] == 0 {
+                return LitBool::Undef;
+            }
+
+            let y = match self.assigns[lit.var()] {
+                LitBool::True => {
+                    if lit.pos() {
+                        LitBool::True
+                    } else {
+                        LitBool::False
+                    }
+                }
+                LitBool::False => {
+                    if lit.neg() {
+                        LitBool::True
+                    } else {
+                        LitBool::False
+                    }
+                }
+                _ => LitBool::Undef,
+            };
+            let x = LitBool::from(self.assigns[lit.var()] as i8 ^ lit.neg() as i8);
+            if x != y {
+                eprintln!("{:?} {:?}", x, y);
+
+                eprintln!("{:?} {:?}", lit, self.assigns[lit.var()]);
+                assert!(false);
+            }*/
+            LitBool::from(self.assigns[lit.var()] as i8 ^ lit.neg() as i8)
         }
         /// Enqueue a variable to assign a `value` to a boolean `assign`
         fn enqueue(&mut self, lit: Lit, reason: Option<CRef>) {
             debug_assert!(self.level[lit.var()] == 0);
-            self.assigns[lit.var()] = LitBool::from(lit.pos() as i8);
+            self.assigns[lit.var()] = LitBool::from(lit.neg() as i8);
+
             self.reason[lit.var()] = reason.map(|cr: CRef| Rc::downgrade(&cr.0));
             self.level[lit.var()] = if let Some(last) = self.que.back() {
                 self.level[last.var()]
