@@ -52,13 +52,13 @@ pub mod solver {
     #[derive(Debug, Default, PartialEq, Eq, PartialOrd, Ord, Clone)]
     pub struct Clause {
         data: Vec<Lit>,
-        mark: bool, // will be deleted
+        mark: u8, // will be deleted
     }
     impl Clause {
         fn new(clause: &[Lit]) -> Clause {
             Clause {
                 data: clause.to_vec(),
-                mark: false,
+                mark: 0,
             }
         }
         fn swap(&mut self, x: usize, y: usize) {
@@ -67,6 +67,15 @@ pub mod solver {
         fn len(&self) -> usize {
             self.data.len()
         }
+        #[allow(dead_code)]
+        fn set_mark(&mut self, x: u8) {
+            self.mark = x;
+        }
+        #[allow(dead_code)]
+        fn mark(&self) -> u8 {
+            self.mark
+        }
+
         #[allow(dead_code)]
         fn truncate(&mut self, len: usize) {
             self.data.truncate(len);
@@ -90,12 +99,22 @@ pub mod solver {
         type Output = Lit;
         #[inline]
         fn index(&self, idx: usize) -> &Self::Output {
+            #[cfg(feature = "unsafe")]
+            unsafe {
+                self.data.get_unchecked(idx)
+            }
+            #[cfg(not(feature = "unsafe"))]
             &self.data[idx]
         }
     }
     impl IndexMut<usize> for Clause {
         #[inline]
         fn index_mut(&mut self, idx: usize) -> &mut Self::Output {
+            #[cfg(feature = "unsafe")]
+            unsafe {
+                self.data.get_unchecked_mut(idx)
+            }
+            #[cfg(not(feature = "unsafe"))]
             &mut self.data[idx]
         }
     }
@@ -105,17 +124,105 @@ pub mod solver {
             Clause::new(&lits)
         }
     }
-
     // Clause //
 
     #[derive(Debug, Default, PartialEq, Eq, PartialOrd, Ord, Clone)]
     struct CRef(Rc<RefCell<Clause>>);
+
     type CWRef = Weak<RefCell<Clause>>;
     impl CRef {
         fn new(clause: Clause) -> CRef {
             CRef(Rc::new(RefCell::new(clause)))
         }
     }
+
+    // LazyWatcher
+    #[derive(Debug, Default)]
+    struct LazyWatcher {
+        dirty: Vec<bool>,
+        dirties: VecDeque<Lit>,
+        data: Vec<Vec<CWRef>>,
+    }
+
+    impl LazyWatcher {
+        fn new(n: usize) -> LazyWatcher {
+            LazyWatcher {
+                dirty: vec![false; 2 * n],
+                dirties: VecDeque::new(),
+                data: vec![vec![]; 2 * n],
+            }
+        }
+
+        fn smudge(&mut self, lit: Lit) {
+            if !self.dirty[lit] {
+                self.dirty[lit] = true;
+                self.dirties.push_back(lit);
+            }
+        }
+
+        fn resize(&mut self, n: usize) {
+            self.dirty.resize(2 * n, false);
+            self.data.resize(2 * n, Vec::new());
+        }
+
+        fn clean_all(&mut self) {
+            if self.dirties.is_empty() {
+                return;
+            }
+            while let Some(lit) = self.dirties.pop_front() {
+                if !self.dirty[lit] {
+                    continue;
+                }
+                debug_assert!(self.dirty[lit]);
+                self.dirty[lit] = false;
+                let mut idx = 0;
+                while idx < self.data[lit].len() {
+                    let cwr = self.data[lit][idx].clone();
+                    let mut remain = true;
+                    if let Some(cr) = cwr.upgrade() {
+                        if cr.borrow().mark() == 1 {
+                            remain = false;
+                        }
+                    } else {
+                        remain = false;
+                    }
+                    if !remain {
+                        self.data[lit].swap_remove(idx);
+                        continue;
+                    }
+                    idx += 1;
+                }
+                //self.data[lit].truncate(new_size);
+            }
+            debug_assert!(self.dirties.is_empty());
+        }
+    }
+
+    impl Index<Lit> for LazyWatcher {
+        type Output = Vec<CWRef>;
+        #[inline]
+        fn index(&self, lit: Lit) -> &Self::Output {
+            #[cfg(feature = "unsafe")]
+            unsafe {
+                self.data.get_unchecked(lit.0 as usize)
+            }
+            #[cfg(not(feature = "unsafe"))]
+            &self.data[lit]
+        }
+    }
+    impl IndexMut<Lit> for LazyWatcher {
+        #[inline]
+        fn index_mut(&mut self, lit: Lit) -> &mut Self::Output {
+            #[cfg(feature = "unsafe")]
+            unsafe {
+                self.data.get_unchecked_mut(lit.0 as usize)
+            }
+            #[cfg(not(feature = "unsafe"))]
+            &mut self.data[lit]
+        }
+    }
+
+    // LazyWatcher
 
     #[derive(PartialEq, Debug, Copy, Clone)]
     /// The status of a problem that solver solved.
@@ -349,7 +456,7 @@ pub mod solver {
         // learnt clauses
         learnts: Vec<CRef>,
         // clauses that may be conflicted or propagated if a `lit` is false.
-        watchers: Vec<Vec<CWRef>>,
+        watchers: LazyWatcher,
         // a clause index represents that a variable is forced to be assigned.
         reason: Vec<Option<CWRef>>,
         // analyze variables
@@ -391,7 +498,7 @@ pub mod solver {
                 assigns: vec![LitBool::Undef; n],
                 polarity: vec![false; n],
                 order_heap: Heap::new(n, 1.0),
-                watchers: vec![vec![]; 2 * n],
+                watchers: LazyWatcher::new(n),
                 status: None,
                 skip_simplify: false,
             };
@@ -438,8 +545,7 @@ pub mod solver {
             self.order_heap.push(v);
             self.seen.push(false);
             // for literals
-            self.watchers.push(Vec::new());
-            self.watchers.push(Vec::new());
+            self.watchers.resize(self.n);
         }
 
         /// This method is only for internal usage and almost same as `add_clause`
@@ -539,6 +645,7 @@ pub mod solver {
         /// If a conflict is detected, this function returns a conflicted clause index.
         /// `None` is no conflicts.
         fn propagate(&mut self) -> Option<CWRef> {
+            self.watchers.clean_all();
             let mut conflict = None;
             'conflict: while self.head < self.que.len() {
                 let p = self.que[self.head];
@@ -615,21 +722,29 @@ pub mod solver {
             }
             false
         }
-        fn unwatch_clause(&mut self, cwr: &CWRef) {
-            let clause = cwr.upgrade().unwrap();
-            let mut cnt = 0;
-            for idx in 0..2 {
-                let p = !clause.borrow()[idx];
-                let n = self.watchers[p].len();
-                for i in 0..n {
-                    if self.watchers[p][i].ptr_eq(&cwr) {
-                        self.watchers[p].swap_remove(i);
-                        cnt += 1;
-                        break;
+        fn unwatch_clause(&mut self, cwr: &CWRef, lazy: bool) {
+            let cr = cwr.upgrade().unwrap();
+            let mut clause = cr.borrow_mut();
+            debug_assert!(clause.len() >= 2);
+            if !lazy {
+                let mut cnt = 0;
+                for idx in 0..2 {
+                    let p = !clause[idx];
+                    let n = self.watchers[p].len();
+                    for i in 0..n {
+                        if self.watchers[p][i].ptr_eq(&cwr) {
+                            self.watchers[p].swap_remove(i);
+                            cnt += 1;
+                            break;
+                        }
                     }
                 }
+                debug_assert!(cnt == 2);
+            } else {
+                self.watchers.smudge(!clause[0]);
+                self.watchers.smudge(!clause[1]);
             }
-            debug_assert!(cnt == 2);
+            clause.set_mark(1);
         }
         fn reduce_learnts(&mut self) {
             self.learnts.sort_by_key(|x| x.0.borrow_mut().len());
@@ -639,8 +754,9 @@ pub mod solver {
             for i in m..n {
                 let cr = self.learnts[i].clone();
                 let cwr = Rc::downgrade(&cr.0);
-                if cr.0.borrow().len() > 2 && !self.locked(&cwr) {
-                    self.unwatch_clause(&cwr);
+                let len = cr.0.borrow().len();
+                if len > 2 && !self.locked(&cwr) {
+                    self.unwatch_clause(&cwr, true);
                 } else {
                     self.learnts[new_size] = cr;
                     new_size += 1;
@@ -680,10 +796,15 @@ pub mod solver {
             let mut detach = false;
             for &lit in clause.iter() {
                 if self.eval(lit) == LitBool::True {
-                    self.detach_clause(clause[0], Rc::downgrade(&cr.0));
                     detach = true;
                     break;
                 }
+            }
+
+            if detach {
+                let first = clause[0];
+                drop(clause);
+                self.detach_clause(first, Rc::downgrade(&cr.0));
             }
             detach
         }
@@ -694,8 +815,7 @@ pub mod solver {
                 let x = cr.borrow()[0];
                 x == lit
             });
-            self.unwatch_clause(&cwr);
-
+            self.unwatch_clause(&cwr, true);
             if self.locked(&cwr) {
                 debug_assert!(self.reason[lit.var()].is_some());
                 self.reason[lit.var()] = None;
