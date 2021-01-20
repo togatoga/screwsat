@@ -13,6 +13,7 @@ categories = ["algorithms", "command-line-utilities"]
 keywords = ["solver", "satisfiability", "sat"]
 
 [dependencies]
+smallvec = { version = "1.6.1", optional = true }
 
 [lib]
 name="screwsat"
@@ -28,4 +29,5 @@ walkdir="2"
 debug = true
 
 [features]
+enable-smallvec=["smallvec"]
 unsafe=[]

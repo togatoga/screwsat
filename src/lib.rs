@@ -48,12 +48,17 @@ pub mod solver {
 
     pub type Clause = Vec<Lit>;
 
+    #[cfg(feature="enable-smallvec")]
+    type InnerClause = smallvec::SmallVec<[Lit; 4]>;
+    #[cfg(not(feature="enable-smallvec"))]
+    type InnerClause = Vec<Lit>;
+
     #[derive(Debug, Default, PartialEq, Eq, PartialOrd, Ord, Clone)]
-    struct CRef(Rc<RefCell<Clause>>);
-    type CWRef = Weak<RefCell<Clause>>;
+    struct CRef(Rc<RefCell<InnerClause>>);
+    type CWRef = Weak<RefCell<InnerClause>>;
     impl CRef {
         fn new(clause: Clause) -> CRef {
-            CRef(Rc::new(RefCell::new(clause)))
+            CRef(Rc::new(RefCell::new(clause.into())))
         }
     }
 
