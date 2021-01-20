@@ -293,6 +293,8 @@ pub mod solver {
         // a clause index represents that a variable is forced to be assigned.
         reason: Vec<Option<CWRef>>,
         seen: Vec<bool>,
+        ccmin_stack: VecDeque<Lit>,
+        ccmin_clear: Vec<Lit>,
         // decision level(0: unassigned, 1: minimum level)
         level: Vec<usize>,
         // assigned variables
@@ -306,6 +308,40 @@ pub mod solver {
     }
 
     impl Solver {
+        /// Create a new `Solver` struct
+        ///
+        /// # Arguments
+        /// * `n` - The number of variable
+        /// * `clauses` - All clauses that solver solves
+        pub fn new(n: usize, clauses: &[Vec<Lit>]) -> Solver {
+            let mut solver = Solver {
+                n,
+                que: VecDeque::new(),
+                head: 0,
+                clauses: Vec::new(),
+                learnts: Vec::new(),
+                reason: vec![None; n],
+                level: vec![0; n],
+                seen: vec![false; n],
+                ccmin_stack: VecDeque::new(),
+                ccmin_clear: Vec::new(),
+                assigns: vec![LitBool::Undef; n],
+                polarity: vec![false; n],
+                order_heap: Heap::new(n, 1.0),
+                watchers: vec![vec![]; 2 * n],
+                status: None,
+                skip_simplify: false,
+            };
+            clauses.iter().for_each(|clause| {
+                if clause.len() == 1 {
+                    solver.enqueue(clause[0], None);
+                } else {
+                    let cr = CRef::new(clause.clone());
+                    solver.add_clause_unchecked(cr, false);
+                }
+            });
+            solver
+        }
         fn eval(&self, lit: Lit) -> LitBool {
             LitBool::from(self.assigns[lit.var()] as i8 ^ lit.neg() as i8)
         }
@@ -635,9 +671,72 @@ pub mod solver {
                 self.clauses.truncate(new_size);
             }
         }
+        fn lit_redundant(&mut self, lit: Lit) -> bool {
+            // Check whether a literal can reach a decision variable or unit clause literal.
+            // Self-subsume
+            self.ccmin_stack.clear();
+            let top = self.ccmin_clear.len();
+            self.ccmin_stack.push_back(lit);
+            while let Some(x) = self.ccmin_stack.pop_back() {
+                let cwr = self.reason[x.var()].as_ref().unwrap();
+                let cr = cwr.upgrade().unwrap();
+                let clause = cr.borrow();
+                debug_assert!(clause[0] == !x);
+                for c in clause.iter().skip(1) {
+                    if !self.seen[c.var()] && self.level[c.var()] > 1 {
+                        if self.reason[c.var()].is_some() {
+                            self.seen[c.var()] = true;
+                            self.ccmin_stack.push_back(*c);
+                            self.ccmin_clear.push(*c);
+                        } else {
+                            // A 'c' is a decision variable or unit clause literal.
+                            // which means a "lit" isn't redundant
+                            for lit in self.ccmin_clear.iter().skip(top) {
+                                self.seen[lit.var()] = false;
+                            }
+                            self.ccmin_clear.truncate(top);
+                            return false;
+                        }
+                    }
+                }
+            }
+            return true;
+        }
+        fn minimize_conflict_clause(&mut self, learnt_clause: &mut Clause) {
+            debug_assert!(self.ccmin_stack.is_empty());
+            debug_assert!(self.ccmin_clear.is_empty());
+            // Simplify conflict clauses
+            let n: usize = learnt_clause.len();
+            let mut new_size = 1;
+            for i in 1..n {
+                let x = learnt_clause[i].var();
+                let mut redundant = false;
 
+                // Traverse a conflict literal to check wheter a literal is redundant.
+                if self.reason[x].is_some() {
+                    redundant = self.lit_redundant(learnt_clause[i]);
+                }
+
+                if !redundant {
+                    learnt_clause[new_size] = learnt_clause[i];
+                    new_size += 1;
+                }
+            }
+            // clear all
+            for lit in self.ccmin_clear.iter() {
+                self.seen[lit.var()] = false;
+            }
+            self.ccmin_stack.clear();
+            self.ccmin_clear.clear();
+            debug_assert!(self.ccmin_stack.is_empty());
+            debug_assert!(self.ccmin_clear.is_empty());
+            learnt_clause.truncate(new_size);
+        }
         /// Analyze a conflict clause and deduce a learnt clause to avoid a current conflict
         fn analyze(&mut self, confl: CWRef) {
+            // seen must be clear
+            debug_assert!(self.seen.iter().all(|&x| !x));
+
             let current_level = self.level[self.que[self.que.len() - 1].var()];
             let mut learnt_clause = vec![];
 
@@ -684,7 +783,6 @@ pub mod solver {
                     let reason = self.reason[v].as_ref().unwrap();
                     debug_assert!(reason.upgrade().is_some());
                     let clause = reason.upgrade().unwrap();
-                    //debug_assert!(self.clauses[reason][0].0 == v);
                     for p in clause.borrow().iter().skip(1) {
                         let var = p.var();
                         // already checked
@@ -704,35 +802,15 @@ pub mod solver {
             };
 
             // p is 1-UIP.
-            let p = first_uip.unwrap();
-            learnt_clause.push(!p);
-            let n = learnt_clause.len();
-            learnt_clause.swap(0, n - 1);
+            {
+                let p = first_uip.unwrap();
+                learnt_clause.push(!p);
+                let n = learnt_clause.len();
+                learnt_clause.swap(0, n - 1);
+            }
 
             let analyze_clear = learnt_clause.clone();
-            // Simplify conflict clauses
-            {
-                let mut new_size = 1;
-                for i in 1..n {
-                    let x = learnt_clause[i].var();
-                    if let Some(cwref) = self.reason[x].as_ref() {
-                        let cr = cwref.upgrade().unwrap();
-                        let clause = cr.borrow();
-                        for lit in clause.iter().skip(1) {
-                            if !self.seen[lit.var()] && self.level[lit.var()] > 1 {
-                                learnt_clause[new_size] = learnt_clause[i];
-                                new_size += 1;
-                                break;
-                            }
-                        }
-                    } else {
-                        learnt_clause[new_size] = learnt_clause[i];
-                        new_size += 1;
-                    }
-                }
-
-                learnt_clause.truncate(new_size);
-            }
+            self.minimize_conflict_clause(&mut learnt_clause);
 
             let backtrack_level = if learnt_clause.len() == 1 {
                 1
@@ -770,38 +848,7 @@ pub mod solver {
                 self.seen[lit.var()] = false;
             }
         }
-        /// Create a new `Solver` struct
-        ///
-        /// # Arguments
-        /// * `n` - The number of variable
-        /// * `clauses` - All clauses that solver solves
-        pub fn new(n: usize, clauses: &[Vec<Lit>]) -> Solver {
-            let mut solver = Solver {
-                n,
-                que: VecDeque::new(),
-                head: 0,
-                clauses: Vec::new(),
-                learnts: Vec::new(),
-                reason: vec![None; n],
-                level: vec![0; n],
-                seen: vec![false; n],
-                assigns: vec![LitBool::Undef; n],
-                polarity: vec![false; n],
-                order_heap: Heap::new(n, 1.0),
-                watchers: vec![vec![]; 2 * n],
-                status: None,
-                skip_simplify: false,
-            };
-            clauses.iter().for_each(|clause| {
-                if clause.len() == 1 {
-                    solver.enqueue(clause[0], None);
-                } else {
-                    let cr = CRef::new(clause.clone());
-                    solver.add_clause_unchecked(cr, false);
-                }
-            });
-            solver
-        }
+
         /// Reserve the space of a clause database
         /// # Arguments
         /// * `cla_num` - The number of clause
