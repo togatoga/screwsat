@@ -9,6 +9,7 @@ pub mod solver {
         vec,
     };
 
+    const TOP_LEVEL: usize = 0;
     #[derive(Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
     pub struct Var(pub u32);
 
@@ -292,10 +293,13 @@ pub mod solver {
         watchers: Vec<Vec<CWRef>>,
         // a clause index represents that a variable is forced to be assigned.
         reason: Vec<Option<CWRef>>,
+        // analyze variables
         seen: Vec<bool>,
+        // analyze variables
         ccmin_stack: VecDeque<Lit>,
+        // analyze variables
         ccmin_clear: Vec<Lit>,
-        // decision level(0: unassigned, 1: minimum level)
+        // decision level(0: minimumlevel)
         level: Vec<usize>,
         // assigned variables
         que: VecDeque<Lit>,
@@ -321,7 +325,7 @@ pub mod solver {
                 clauses: Vec::new(),
                 learnts: Vec::new(),
                 reason: vec![None; n],
-                level: vec![0; n],
+                level: vec![TOP_LEVEL; n],
                 seen: vec![false; n],
                 ccmin_stack: VecDeque::new(),
                 ccmin_clear: Vec::new(),
@@ -345,17 +349,22 @@ pub mod solver {
         fn eval(&self, lit: Lit) -> LitBool {
             LitBool::from(self.assigns[lit.var()] as i8 ^ lit.neg() as i8)
         }
+
+        fn current_level(&self) -> usize {
+            self.que
+                .back()
+                .map(|x| self.level[x.var()])
+                .unwrap_or(TOP_LEVEL)
+        }
+
         /// Enqueue a variable to assign a `value` to a boolean `assign`
         fn enqueue(&mut self, lit: Lit, reason: Option<CRef>) {
-            debug_assert!(self.level[lit.var()] == 0);
+            debug_assert!(self.eval(lit) == LitBool::Undef);
+
             self.assigns[lit.var()] = LitBool::from(lit.neg() as i8);
 
             self.reason[lit.var()] = reason.map(|cr: CRef| Rc::downgrade(&cr.0));
-            self.level[lit.var()] = if let Some(last) = self.que.back() {
-                self.level[last.var()]
-            } else {
-                1
-            };
+            self.level[lit.var()] = self.current_level();
             self.que.push_back(lit);
         }
 
@@ -394,6 +403,7 @@ pub mod solver {
         /// # Arguments
         /// * `clause` - a clause has one or some literal variables
         pub fn add_clause(&mut self, clause: &[Lit]) {
+            debug_assert!(self.current_level() == TOP_LEVEL);
             // grow the space of array variables.
             clause.iter().for_each(|c| {
                 while c.var().0 as usize >= self.assigns.len() {
@@ -474,7 +484,7 @@ pub mod solver {
             'conflict: while self.head < self.que.len() {
                 let p = self.que[self.head];
                 self.head += 1;
-                debug_assert!(self.level[p.var()] > 0);
+                debug_assert!(self.assigns[p.var()] != LitBool::Undef);
 
                 let mut idx = 0;
 
@@ -507,9 +517,7 @@ pub mod solver {
                         // Found a literal isn't false(true or undefined)
                         if self.eval(lit) != LitBool::False {
                             clause.swap(1, k);
-
-                            self.watchers[p].swap(idx, m - 1);
-                            self.watchers[p].pop();
+                            self.watchers[p].swap_remove(idx);
 
                             self.watchers[!clause[1]].push(cwr);
                             // NOTE
@@ -524,7 +532,6 @@ pub mod solver {
                         // a first literal(clause[0]) is false.
                         // clause[1] is a false
                         // clause[2..len] is a false
-
                         conflict = Some(cwr);
                         break 'conflict;
                     } else {
@@ -532,11 +539,6 @@ pub mod solver {
                         // a first literal(clause[0]) isn't assigned.
                         // clause[1] is a false
                         // clause[2..len] is a false
-
-                        debug_assert_eq!(self.level[first.var()], 0);
-                        // NOTE
-                        // I don't know how to handle this borrowing problem. Please help me.
-                        // self.enqueue(var, sign, Some(cr));
                         self.enqueue(first, Some(CRef(cr.clone())));
                     }
                     idx += 1;
@@ -562,8 +564,7 @@ pub mod solver {
                 let n = self.watchers[p].len();
                 for i in 0..n {
                     if self.watchers[p][i].ptr_eq(&cwr) {
-                        self.watchers[p].swap(i, n - 1);
-                        self.watchers[p].pop();
+                        self.watchers[p].swap_remove(i);
                         cnt += 1;
                         break;
                     }
@@ -602,7 +603,7 @@ pub mod solver {
                     };
                     self.assigns[p.var()] = LitBool::Undef;
                     self.reason[p.var()] = None;
-                    self.level[p.var()] = 0;
+                    self.level[p.var()] = TOP_LEVEL;
                     self.que.pop_back();
                 } else {
                     break;
@@ -615,55 +616,58 @@ pub mod solver {
             }
         }
 
+        fn detach_if_satisfied(&mut self, cr: &CRef) -> bool {
+            let clause = cr.0.borrow();
+            let mut detach = false;
+            for &lit in clause.iter() {
+                if self.eval(lit) == LitBool::True {
+                    self.detach_clause(clause[0], Rc::downgrade(&cr.0));
+                    detach = true;
+                    break;
+                }
+            }
+            detach
+        }
+        fn detach_clause(&mut self, lit: Lit, cwr: CWRef) {
+            // A "lit" is a asserting clause
+            debug_assert!({
+                let cr = cwr.upgrade().unwrap();
+                let x = cr.borrow()[0];
+                x == lit
+            });
+            self.unwatch_clause(&cwr);
+
+            if self.locked(&cwr) {
+                debug_assert!(self.reason[lit.var()].is_some());
+                self.reason[lit.var()] = None;
+            }
+        }
+
         fn simplify(&mut self) {
+            debug_assert!(self.current_level() == TOP_LEVEL);
             {
+                // learnts
                 let n: usize = self.learnts.len();
                 let mut new_size = 0;
                 for i in 0..n {
                     let cr = self.learnts[i].clone();
-                    let clause = cr.0.borrow();
-                    let mut satisfied = false;
-                    for &lit in clause.iter() {
-                        if self.eval(lit) == LitBool::True {
-                            let cwr = Rc::downgrade(&cr.0);
-                            self.unwatch_clause(&cwr);
-                            if self.locked(&cwr) {
-                                debug_assert!(self.reason[clause[0].var()].is_some());
-                                self.reason[clause[0].var()] = None;
-                            }
-                            satisfied = true;
-                            break;
-                        }
-                    }
-                    drop(clause);
-                    if !satisfied {
+                    let detach = self.detach_if_satisfied(&cr);
+                    if !detach {
                         self.learnts[new_size] = cr;
                         new_size += 1;
                     }
                 }
                 self.learnts.truncate(new_size);
             }
+
             {
+                // clauses
                 let n: usize = self.clauses.len();
                 let mut new_size = 0;
                 for i in 0..n {
                     let cr = self.clauses[i].clone();
-                    let clause = cr.0.borrow();
-                    let mut satisfied = false;
-                    for &lit in clause.iter() {
-                        if self.eval(lit) == LitBool::True {
-                            let cwr = Rc::downgrade(&cr.0);
-                            self.unwatch_clause(&cwr);
-                            if self.locked(&cwr) {
-                                debug_assert!(self.reason[clause[0].var()].is_some());
-                                self.reason[clause[0].var()] = None;
-                            }
-                            satisfied = true;
-                            break;
-                        }
-                    }
-                    drop(clause);
-                    if !satisfied {
+                    let detach = self.detach_if_satisfied(&cr);
+                    if !detach {
                         self.clauses[new_size] = cr;
                         new_size += 1;
                     }
@@ -671,7 +675,8 @@ pub mod solver {
                 self.clauses.truncate(new_size);
             }
         }
-        fn lit_redundant(&mut self, lit: Lit) -> bool {
+
+        fn lit_redundant(&mut self, lit: Lit, abstract_levels: u32) -> bool {
             // Check whether a literal can reach a decision variable or unit clause literal.
             // Self-subsume
             self.ccmin_stack.clear();
@@ -683,9 +688,14 @@ pub mod solver {
                 let clause = cr.borrow();
                 debug_assert!(clause[0] == !x);
                 for c in clause.iter().skip(1) {
-                    if !self.seen[c.var()] && self.level[c.var()] > 1 {
-                        if self.reason[c.var()].is_some() {
+                    if !self.seen[c.var()] && self.level[c.var()] > TOP_LEVEL {
+                        // If a 'c' is decided by a level that is different from conflict literals.
+                        // abstract_level(c) & abstract_levels == 0
+                        if self.reason[c.var()].is_some()
+                            && (self.abstract_level(*c) & abstract_levels) != 0
+                        {
                             self.seen[c.var()] = true;
+
                             self.ccmin_stack.push_back(*c);
                             self.ccmin_clear.push(*c);
                         } else {
@@ -700,11 +710,21 @@ pub mod solver {
                     }
                 }
             }
-            return true;
+            true
+        }
+
+        fn abstract_level(&self, x: Lit) -> u32 {
+            1 << (self.level[x.var()] as u32 & 31)
         }
         fn minimize_conflict_clause(&mut self, learnt_clause: &mut Clause) {
             debug_assert!(self.ccmin_stack.is_empty());
             debug_assert!(self.ccmin_clear.is_empty());
+
+            let abstract_levels = learnt_clause
+                .iter()
+                .skip(1)
+                .fold(0, |als: u32, x| als | self.abstract_level(*x));
+
             // Simplify conflict clauses
             let n: usize = learnt_clause.len();
             let mut new_size = 1;
@@ -714,7 +734,7 @@ pub mod solver {
 
                 // Traverse a conflict literal to check wheter a literal is redundant.
                 if self.reason[x].is_some() {
-                    redundant = self.lit_redundant(learnt_clause[i]);
+                    redundant = self.lit_redundant(learnt_clause[i], abstract_levels);
                 }
 
                 if !redundant {
@@ -737,7 +757,7 @@ pub mod solver {
             // seen must be clear
             debug_assert!(self.seen.iter().all(|&x| !x));
 
-            let current_level = self.level[self.que[self.que.len() - 1].var()];
+            let current_level = self.current_level();
             let mut learnt_clause = vec![];
 
             let mut same_level_cnt = 0;
@@ -746,7 +766,8 @@ pub mod solver {
             // implication graph nodes that are start point from a conflict clause.
             for p in clause.borrow().iter() {
                 let var = p.var();
-                debug_assert!(self.level[var] > 0);
+                debug_assert!(self.eval(*p) != LitBool::Undef);
+
                 self.order_heap.bump_activity(var);
                 // already checked
                 self.seen[var] = true;
@@ -813,7 +834,7 @@ pub mod solver {
             self.minimize_conflict_clause(&mut learnt_clause);
 
             let backtrack_level = if learnt_clause.len() == 1 {
-                1
+                TOP_LEVEL
             } else {
                 let mut max_idx = 1;
                 let mut max_level = self.level[learnt_clause[max_idx].var()];
@@ -833,7 +854,7 @@ pub mod solver {
 
             // propagate it by a new learnt clause
             if learnt_clause.len() == 1 {
-                debug_assert_eq!(backtrack_level, 1);
+                debug_assert_eq!(backtrack_level, TOP_LEVEL);
                 self.skip_simplify = false;
                 self.enqueue(learnt_clause[0], None);
             } else {
@@ -847,6 +868,9 @@ pub mod solver {
             for lit in analyze_clear {
                 self.seen[lit.var()] = false;
             }
+        }
+        fn define(&self, x: Var) -> bool {
+            self.assigns[x] != LitBool::Undef
         }
 
         /// Reserve the space of a clause database
@@ -889,9 +913,7 @@ pub mod solver {
                 }
                 if let Some(confl) = self.propagate() {
                     //Conflict
-
-                    let current_level = self.level[self.que.back().unwrap().var()];
-                    if current_level == 1 {
+                    if self.current_level() == TOP_LEVEL {
                         self.status = Some(Status::Unsat);
                         return Status::Unsat;
                     }
@@ -902,11 +924,12 @@ pub mod solver {
                     // No Conflict
                     if conflict_cnt as f64 >= restart_limit {
                         restart_limit *= 1.1;
-                        self.pop_queue_until(1);
-                        if !self.skip_simplify {
-                            self.simplify();
-                            self.skip_simplify = true;
-                        }
+                        self.pop_queue_until(TOP_LEVEL);
+                    }
+
+                    if self.current_level() == TOP_LEVEL && !self.skip_simplify {
+                        self.simplify();
+                        self.skip_simplify = true;
                     }
 
                     if max_learnt_clause as usize <= self.learnts.len() {
@@ -917,7 +940,7 @@ pub mod solver {
                     // Select a decision variable that isn't decided yet
                     loop {
                         if let Some(v) = self.order_heap.pop() {
-                            if self.level[v] != 0 {
+                            if self.define(v) {
                                 continue;
                             }
 
