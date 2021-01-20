@@ -3,7 +3,7 @@ pub mod solver {
     use std::{
         cell::RefCell,
         collections::VecDeque,
-        ops::{Index, IndexMut},
+        ops::{Deref, DerefMut, Index, IndexMut},
         rc::{Rc, Weak},
         time::{Duration, Instant},
         vec,
@@ -47,7 +47,66 @@ pub mod solver {
         }
     }
 
-    pub type Clause = Vec<Lit>;
+    // Clause //
+
+    #[derive(Debug, Default, PartialEq, Eq, PartialOrd, Ord, Clone)]
+    pub struct Clause {
+        data: Vec<Lit>,
+        mark: bool, // will be deleted
+    }
+    impl Clause {
+        fn new(clause: &[Lit]) -> Clause {
+            Clause {
+                data: clause.to_vec(),
+                mark: false,
+            }
+        }
+        fn swap(&mut self, x: usize, y: usize) {
+            self.data.swap(x, y);
+        }
+        fn len(&self) -> usize {
+            self.data.len()
+        }
+        #[allow(dead_code)]
+        fn truncate(&mut self, len: usize) {
+            self.data.truncate(len);
+        }
+    }
+
+    impl Deref for Clause {
+        type Target = [Lit];
+        fn deref(&self) -> &Self::Target {
+            &self.data
+        }
+    }
+
+    impl DerefMut for Clause {
+        fn deref_mut(&mut self) -> &mut Self::Target {
+            &mut self.data
+        }
+    }
+
+    impl Index<usize> for Clause {
+        type Output = Lit;
+        #[inline]
+        fn index(&self, idx: usize) -> &Self::Output {
+            &self.data[idx]
+        }
+    }
+    impl IndexMut<usize> for Clause {
+        #[inline]
+        fn index_mut(&mut self, idx: usize) -> &mut Self::Output {
+            &mut self.data[idx]
+        }
+    }
+
+    impl From<Vec<Lit>> for Clause {
+        fn from(lits: Vec<Lit>) -> Self {
+            Clause::new(&lits)
+        }
+    }
+
+    // Clause //
 
     #[derive(Debug, Default, PartialEq, Eq, PartialOrd, Ord, Clone)]
     struct CRef(Rc<RefCell<Clause>>);
@@ -340,7 +399,7 @@ pub mod solver {
                 if clause.len() == 1 {
                     solver.enqueue(clause[0], None);
                 } else {
-                    let cr = CRef::new(clause.clone());
+                    let cr = CRef::new(Clause::new(clause));
                     solver.add_clause_unchecked(cr, false);
                 }
             });
@@ -468,7 +527,7 @@ pub mod solver {
                 debug_assert!(clause.len() >= 2);
                 let l1 = clause[0];
                 let l2 = clause[1];
-                let cr = CRef::new(clause);
+                let cr = CRef::new(Clause::new(&clause));
 
                 self.watchers[!l1].push(Rc::downgrade(&cr.0));
                 self.watchers[!l2].push(Rc::downgrade(&cr.0));
@@ -716,7 +775,7 @@ pub mod solver {
         fn abstract_level(&self, x: Lit) -> u32 {
             1 << (self.level[x.var()] as u32 & 31)
         }
-        fn minimize_conflict_clause(&mut self, learnt_clause: &mut Clause) {
+        fn minimize_conflict_clause(&mut self, learnt_clause: &mut Vec<Lit>) {
             debug_assert!(self.ccmin_stack.is_empty());
             debug_assert!(self.ccmin_clear.is_empty());
 
@@ -859,7 +918,7 @@ pub mod solver {
                 self.enqueue(learnt_clause[0], None);
             } else {
                 let first = learnt_clause[0];
-                let cr = CRef::new(learnt_clause);
+                let cr = CRef::new(Clause::from(learnt_clause));
                 self.enqueue(first, Some(cr.clone()));
                 self.add_clause_unchecked(cr, true);
             }
@@ -962,7 +1021,7 @@ pub mod solver {
 
 // This mod contains utility functions
 pub mod util {
-    use super::solver::{Clause, Lit};
+    use super::solver::Lit;
     use std::io::BufRead;
 
     // CnfData is parsed form a input file
@@ -973,7 +1032,7 @@ pub mod util {
         // the number of clause
         pub cla_num: Option<usize>,
         // all problem clauses
-        pub clauses: Vec<Clause>,
+        pub clauses: Vec<Vec<Lit>>,
     }
     /// Parse a DIMACAS cnf file
     /// # Arguments
