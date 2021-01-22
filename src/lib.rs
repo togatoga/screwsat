@@ -1,10 +1,8 @@
 pub mod solver {
 
     use std::{
-        cell::RefCell,
         collections::VecDeque,
         ops::{Deref, DerefMut, Index, IndexMut},
-        rc::{Rc, Weak},
         time::{Duration, Instant},
         vec,
     };
@@ -49,16 +47,16 @@ pub mod solver {
 
     // Clause //
 
-    #[derive(Debug, Default, PartialEq, Eq, PartialOrd, Ord, Clone)]
+    #[derive(Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
     pub struct Clause {
         data: Vec<Lit>,
-        mark: bool, // will be deleted
+        free: bool, // will be deleted
     }
     impl Clause {
         fn new(clause: &[Lit]) -> Clause {
             Clause {
                 data: clause.to_vec(),
-                mark: false,
+                free: false,
             }
         }
         fn swap(&mut self, x: usize, y: usize) {
@@ -66,6 +64,9 @@ pub mod solver {
         }
         fn len(&self) -> usize {
             self.data.len()
+        }
+        fn byte(&self) -> usize {
+            std::mem::size_of::<Lit>() * self.data.capacity() + std::mem::size_of::<Clause>()
         }
         #[allow(dead_code)]
         fn truncate(&mut self, len: usize) {
@@ -108,12 +109,91 @@ pub mod solver {
 
     // Clause //
 
-    #[derive(Debug, Default, PartialEq, Eq, PartialOrd, Ord, Clone)]
-    struct CRef(Rc<RefCell<Clause>>);
-    type CWRef = Weak<RefCell<Clause>>;
-    impl CRef {
-        fn new(clause: Clause) -> CRef {
-            CRef(Rc::new(RefCell::new(clause)))
+    #[derive(Debug, Default, PartialEq, Eq, PartialOrd, Ord, Copy, Clone)]
+    struct CRef(usize);
+    #[derive(Debug, Default)]
+    struct ClauseDB {
+        // original
+        clauses: Vec<CRef>,
+        // learnts
+        learnts: Vec<CRef>,
+        db: Vec<Clause>,
+        total: usize,
+        wasted: usize,
+    }
+    impl Deref for ClauseDB {
+        type Target = [Clause];
+        fn deref(&self) -> &Self::Target {
+            &self.db
+        }
+    }
+
+    impl DerefMut for ClauseDB {
+        fn deref_mut(&mut self) -> &mut Self::Target {
+            &mut self.db
+        }
+    }
+
+    impl Index<CRef> for ClauseDB {
+        type Output = Clause;
+        #[inline]
+        fn index(&self, cref: CRef) -> &Self::Output {
+            &self.db[cref.0]
+        }
+    }
+    impl IndexMut<CRef> for ClauseDB {
+        #[inline]
+        fn index_mut(&mut self, cref: CRef) -> &mut Self::Output {
+            &mut self.db[cref.0]
+        }
+    }
+
+    impl ClauseDB {
+        pub fn new() -> ClauseDB {
+            ClauseDB {
+                clauses: Vec::new(),
+                learnts: Vec::new(),
+                db: Vec::new(),
+                total: 0,
+                wasted: 0,
+            }
+        }
+        fn alloc(&self) -> CRef {
+            CRef(self.db.len())
+        }
+        fn free(&mut self, cr: CRef) {
+            debug_assert!(!self[cr].free);
+            self.wasted += self[cr].byte();
+            self[cr].free = true;
+        }
+        #[allow(dead_code)]
+        fn wasted(&self) -> usize {
+            self.wasted
+        }
+        #[allow(dead_code)]
+        fn total(&self) -> usize {
+            self.total
+        }
+        #[allow(dead_code)]
+        fn get(&self, cr: CRef) -> &Clause {
+            &self[cr]
+        }
+        #[allow(dead_code)]
+        fn get_mut(&mut self, cr: CRef) -> &mut Clause {
+            &mut self[cr]
+        }
+
+        pub fn push(&mut self, lits: &[Lit], learnt: bool) -> CRef {
+            let cref = self.alloc();
+            if learnt {
+                self.learnts.push(cref);
+            } else {
+                self.clauses.push(cref);
+            }
+            let clause = Clause::new(lits);
+            self.total += clause.byte();
+            self.db.push(clause);
+            cref
         }
     }
 
@@ -344,15 +424,12 @@ pub mod solver {
         // assignments for each variable
         pub assigns: Vec<LitBool>,
         polarity: Vec<bool>,
-        // original clauses
-        clauses: Vec<CRef>,
-        // learnt clauses
-        learnts: Vec<CRef>,
+        // clause data base(original + learnt)
+        db: ClauseDB,
         // clauses that may be conflicted or propagated if a `lit` is false.
-        watchers: Vec<Vec<CWRef>>,
+        watchers: Vec<Vec<CRef>>,
         // a clause index represents that a variable is forced to be assigned.
-        reason: Vec<Option<CWRef>>,
-        // analyze variables
+        reason: Vec<Option<CRef>>,
         seen: Vec<bool>,
         // analyze variables
         ccmin_stack: VecDeque<Lit>,
@@ -381,8 +458,7 @@ pub mod solver {
                 n,
                 que: VecDeque::new(),
                 head: 0,
-                clauses: Vec::new(),
-                learnts: Vec::new(),
+                db: ClauseDB::new(),
                 reason: vec![None; n],
                 level: vec![TOP_LEVEL; n],
                 seen: vec![false; n],
@@ -399,8 +475,7 @@ pub mod solver {
                 if clause.len() == 1 {
                     solver.enqueue(clause[0], None);
                 } else {
-                    let cr = CRef::new(Clause::new(clause));
-                    solver.add_clause_unchecked(cr, false);
+                    solver.add_clause(clause);
                 }
             });
             solver
@@ -422,8 +497,12 @@ pub mod solver {
 
             self.assigns[lit.var()] = LitBool::from(lit.neg() as i8);
 
-            self.reason[lit.var()] = reason.map(|cr: CRef| Rc::downgrade(&cr.0));
-            self.level[lit.var()] = self.current_level();
+            self.reason[lit.var()] = reason;
+            self.level[lit.var()] = if let Some(last) = self.que.back() {
+                self.level[last.var()]
+            } else {
+                TOP_LEVEL
+            };
             self.que.push_back(lit);
         }
 
@@ -444,18 +523,13 @@ pub mod solver {
 
         /// This method is only for internal usage and almost same as `add_clause`
         /// But, this method doesn't grow the size of array.
-        fn add_clause_unchecked(&mut self, cr: CRef, learnt: bool) {
-            let clause = cr.0.borrow();
-            debug_assert!(clause.len() >= 2);
-            //let cr = Rc::new(RefCell::new(clause));
+        fn add_clause_db(&mut self, lits: &[Lit], learnt: bool) -> CRef {
+            let cref = self.db.push(lits, learnt);
+            debug_assert!(lits.len() >= 2);
 
-            self.watchers[!clause[0]].push(Rc::downgrade(&cr.0));
-            self.watchers[!clause[1]].push(Rc::downgrade(&cr.0));
-            if learnt {
-                self.learnts.push(cr.clone());
-            } else {
-                self.clauses.push(cr.clone());
-            }
+            self.watchers[!lits[0]].push(cref);
+            self.watchers[!lits[1]].push(cref);
+            cref
         }
         /// Add a new clause to `clauses` and watch a clause.
         /// If a variable is greater than the size of array, grow it.
@@ -527,18 +601,17 @@ pub mod solver {
                 debug_assert!(clause.len() >= 2);
                 let l1 = clause[0];
                 let l2 = clause[1];
-                let cr = CRef::new(Clause::new(&clause));
+                let cref = self.db.push(&clause, false);
 
-                self.watchers[!l1].push(Rc::downgrade(&cr.0));
-                self.watchers[!l2].push(Rc::downgrade(&cr.0));
-                self.clauses.push(cr);
+                self.watchers[!l1].push(cref);
+                self.watchers[!l2].push(cref);
             }
         }
 
         /// Propagate it by all enqueued values and check conflicts.
         /// If a conflict is detected, this function returns a conflicted clause index.
         /// `None` is no conflicts.
-        fn propagate(&mut self) -> Option<CWRef> {
+        fn propagate(&mut self) -> Option<CRef> {
             let mut conflict = None;
             'conflict: while self.head < self.que.len() {
                 let p = self.que[self.head];
@@ -550,55 +623,56 @@ pub mod solver {
                 'next_clause: while idx < self.watchers[p].len() {
                     let m = self.watchers[p].len();
                     debug_assert!(idx < m);
-                    let cwr = self.watchers[p][idx].clone();
-                    debug_assert!(cwr.upgrade().is_some());
+                    let cr = self.watchers[p][idx];
 
-                    let cr = cwr.upgrade().unwrap();
-                    debug_assert!(Rc::strong_count(&cr) == 2);
-                    let mut clause = cr.borrow_mut();
+                    let clause = &mut self.db[cr] as *mut Clause;
+                    unsafe {
+                        debug_assert!(!(*clause).free);
 
-                    debug_assert!(clause[0] == !p || clause[1] == !p);
+                        debug_assert!((*clause)[0] == !p || (*clause)[1] == !p);
 
-                    // make sure that the clause[1] is the false literal.
-                    if clause[0] == !p {
-                        clause.swap(0, 1);
-                    }
-                    let first = clause[0];
-                    // already satisfied
-                    if self.eval(first) == LitBool::True {
-                        debug_assert!(first != clause[1]);
-                        idx += 1;
-                        continue 'next_clause;
-                    }
-
-                    for k in 2..clause.len() {
-                        let lit = clause[k];
-                        // Found a literal isn't false(true or undefined)
-                        if self.eval(lit) != LitBool::False {
-                            clause.swap(1, k);
-                            self.watchers[p].swap_remove(idx);
-
-                            self.watchers[!clause[1]].push(cwr);
-                            // NOTE
-                            // Don't increase `idx` because you replace and the idx element with the last one.
+                        // make sure that the clause[1] is the false literal.
+                        if (*clause)[0] == !p {
+                            (*clause).swap(0, 1);
+                        }
+                        let first = (*clause)[0];
+                        // already satisfied
+                        if self.eval(first) == LitBool::True {
+                            debug_assert!(first != (*clause)[1]);
+                            idx += 1;
                             continue 'next_clause;
                         }
-                    }
-                    //debug_assert_eq!(watcher[idx], cr);
 
-                    if self.eval(first) == LitBool::False {
-                        // CONFLICT
-                        // a first literal(clause[0]) is false.
-                        // clause[1] is a false
-                        // clause[2..len] is a false
-                        conflict = Some(cwr);
-                        break 'conflict;
-                    } else {
-                        // UNIT PROPAGATION
-                        // a first literal(clause[0]) isn't assigned.
-                        // clause[1] is a false
-                        // clause[2..len] is a false
-                        self.enqueue(first, Some(CRef(cr.clone())));
+                        for k in 2..(*clause).len() {
+                            let lit = (*clause)[k];
+                            // Found a literal isn't false(true or undefined)
+                            if self.eval(lit) != LitBool::False {
+                                (*clause).swap(1, k);
+                                self.watchers[p].swap_remove(idx);
+
+                                self.watchers[!(*clause)[1]].push(cr);
+                                // NOTE
+                                // Don't increase `idx` because you replace and the idx element with the last one.
+                                continue 'next_clause;
+                            }
+                        }
+
+                        //debug_assert_eq!(watcher[idx], cr);
+
+                        if self.eval(first) == LitBool::False {
+                            // CONFLICT
+                            // a first literal(clause[0]) is false.
+                            // clause[1] is a false
+                            // clause[2..len] is a false
+                            conflict = Some(cr);
+                            break 'conflict;
+                        } else {
+                            // UNIT PROPAGATION
+                            // a first literal(clause[0]) isn't assigned.
+                            // clause[1] is a false
+                            // clause[2..len] is a false
+                            self.enqueue(first, Some(cr));
+                        }
                     }
                     idx += 1;
                 }
@@ -606,48 +680,54 @@ pub mod solver {
 
             conflict
         }
-        fn locked(&self, cwr: &CWRef) -> bool {
-            let c = cwr.upgrade().unwrap().borrow()[0];
+        fn locked(&self, cref: CRef) -> bool {
+            let c = self.db[cref][0];
             if self.eval(c) == LitBool::True {
                 if let Some(reason) = self.reason[c.var()].as_ref() {
-                    return reason.ptr_eq(cwr);
+                    return *reason == cref;
                 }
             }
             false
         }
-        fn unwatch_clause(&mut self, cwr: &CWRef) {
-            let clause = cwr.upgrade().unwrap();
+        fn unwatch_clause(&mut self, cref: CRef) {
+            let clause = &self.db[cref];
             let mut cnt = 0;
             for idx in 0..2 {
-                let p = !clause.borrow()[idx];
+                let p = !clause[idx];
                 let n = self.watchers[p].len();
                 for i in 0..n {
-                    if self.watchers[p][i].ptr_eq(&cwr) {
+                    if self.watchers[p][i] == cref {
                         self.watchers[p].swap_remove(i);
                         cnt += 1;
                         break;
                     }
                 }
             }
+            assert!(cnt == 2);
             debug_assert!(cnt == 2);
         }
         fn reduce_learnts(&mut self) {
-            self.learnts.sort_by_key(|x| x.0.borrow_mut().len());
-            let mut new_size = self.learnts.len() / 2;
-            let m = new_size;
-            let n: usize = self.learnts.len();
-            for i in m..n {
-                let cr = self.learnts[i].clone();
-                let cwr = Rc::downgrade(&cr.0);
-                if cr.0.borrow().len() > 2 && !self.locked(&cwr) {
-                    self.unwatch_clause(&cwr);
+            let mut learnts: Vec<_> = self
+                .db
+                .learnts
+                .iter()
+                .map(|&cr| (self.db[cr].len(), cr))
+                .collect();
+            learnts.sort();
+            //clear learnts
+            self.db.learnts.clear();
+
+            let n = learnts.len();
+            for (i, (_, cr)) in learnts.into_iter().enumerate() {
+                let len = self.db[cr].len();
+                if i >= n / 2 && len > 2 && !self.locked(cr) {
+                    self.detach_clause(cr);
                 } else {
-                    self.learnts[new_size] = cr;
-                    new_size += 1;
+                    self.db.learnts.push(cr);
                 }
             }
 
-            self.learnts.truncate(new_size);
+            // A ratio of the fragmentation is greater than 0.2
         }
 
         fn pop_queue_until(&mut self, backtrack_level: usize) {
@@ -675,63 +755,59 @@ pub mod solver {
             }
         }
 
-        fn detach_if_satisfied(&mut self, cr: &CRef) -> bool {
-            let clause = cr.0.borrow();
+        fn detach_if_satisfied(&mut self, cr: CRef) -> bool {
             let mut detach = false;
-            for &lit in clause.iter() {
+            for &lit in self.db[cr].iter() {
                 if self.eval(lit) == LitBool::True {
-                    self.detach_clause(clause[0], Rc::downgrade(&cr.0));
+                    self.detach_clause(cr);
                     detach = true;
                     break;
                 }
             }
             detach
         }
-        fn detach_clause(&mut self, lit: Lit, cwr: CWRef) {
+        fn detach_clause(&mut self, cr: CRef) {
             // A "lit" is a asserting clause
-            debug_assert!({
-                let cr = cwr.upgrade().unwrap();
-                let x = cr.borrow()[0];
-                x == lit
-            });
-            self.unwatch_clause(&cwr);
+            let lit = self.db[cr][0];
+            self.unwatch_clause(cr);
 
-            if self.locked(&cwr) {
+            if self.locked(cr) {
                 debug_assert!(self.reason[lit.var()].is_some());
                 self.reason[lit.var()] = None;
             }
+            self.db.free(cr);
         }
 
         fn simplify(&mut self) {
             debug_assert!(self.current_level() == TOP_LEVEL);
             {
                 // learnts
-                let n: usize = self.learnts.len();
+                let n: usize = self.db.learnts.len();
                 let mut new_size = 0;
                 for i in 0..n {
-                    let cr = self.learnts[i].clone();
-                    let detach = self.detach_if_satisfied(&cr);
+                    let cr = self.db.learnts[i];
+                    let detach = self.detach_if_satisfied(cr);
                     if !detach {
-                        self.learnts[new_size] = cr;
+                        self.db.learnts[new_size] = cr;
                         new_size += 1;
                     }
                 }
-                self.learnts.truncate(new_size);
+                self.db.learnts.truncate(new_size);
             }
 
             {
                 // clauses
-                let n: usize = self.clauses.len();
+                let n: usize = self.db.clauses.len();
                 let mut new_size = 0;
                 for i in 0..n {
-                    let cr = self.clauses[i].clone();
-                    let detach = self.detach_if_satisfied(&cr);
+                    let cr = self.db.clauses[i];
+                    let detach = self.detach_if_satisfied(cr);
                     if !detach {
-                        self.clauses[new_size] = cr;
+                        self.db.clauses[new_size] = cr;
                         new_size += 1;
                     }
                 }
-                self.clauses.truncate(new_size);
+                self.db.clauses.truncate(new_size);
             }
         }
 
@@ -742,9 +818,9 @@ pub mod solver {
             let top = self.ccmin_clear.len();
             self.ccmin_stack.push_back(lit);
             while let Some(x) = self.ccmin_stack.pop_back() {
-                let cwr = self.reason[x.var()].as_ref().unwrap();
-                let cr = cwr.upgrade().unwrap();
-                let clause = cr.borrow();
+                let cr = self.reason[x.var()].as_ref().unwrap();
+
+                let clause = &self.db[*cr];
                 debug_assert!(clause[0] == !x);
                 for c in clause.iter().skip(1) {
                     if !self.seen[c.var()] && self.level[c.var()] > TOP_LEVEL {
@@ -807,12 +883,10 @@ pub mod solver {
             }
             self.ccmin_stack.clear();
             self.ccmin_clear.clear();
-            debug_assert!(self.ccmin_stack.is_empty());
-            debug_assert!(self.ccmin_clear.is_empty());
             learnt_clause.truncate(new_size);
         }
         /// Analyze a conflict clause and deduce a learnt clause to avoid a current conflict
-        fn analyze(&mut self, confl: CWRef) {
+        fn analyze(&mut self, confl: CRef) {
             // seen must be clear
             debug_assert!(self.seen.iter().all(|&x| !x));
 
@@ -820,10 +894,11 @@ pub mod solver {
             let mut learnt_clause = vec![];
 
             let mut same_level_cnt = 0;
-            debug_assert!(confl.upgrade().is_some());
-            let clause = confl.upgrade().unwrap();
+
+            let clause = &self.db[confl];
+            debug_assert!(!clause.free);
             // implication graph nodes that are start point from a conflict clause.
-            for p in clause.borrow().iter() {
+            for p in clause.iter() {
                 let var = p.var();
                 debug_assert!(self.eval(*p) != LitBool::Undef);
 
@@ -861,9 +936,9 @@ pub mod solver {
 
                     debug_assert!(self.reason[v].is_some());
                     let reason = self.reason[v].as_ref().unwrap();
-                    debug_assert!(reason.upgrade().is_some());
-                    let clause = reason.upgrade().unwrap();
-                    for p in clause.borrow().iter().skip(1) {
+
+                    let clause = &self.db[*reason];
+                    for p in clause.iter().skip(1) {
                         let var = p.var();
                         // already checked
                         if self.seen[var] {
@@ -918,9 +993,9 @@ pub mod solver {
                 self.enqueue(learnt_clause[0], None);
             } else {
                 let first = learnt_clause[0];
-                let cr = CRef::new(Clause::from(learnt_clause));
-                self.enqueue(first, Some(cr.clone()));
-                self.add_clause_unchecked(cr, true);
+
+                let cr = self.add_clause_db(&learnt_clause, true);
+                self.enqueue(first, Some(cr));
             }
 
             // Clear seen
@@ -936,14 +1011,14 @@ pub mod solver {
         /// # Arguments
         /// * `cla_num` - The number of clause
         pub fn reserve_clause(&mut self, cla_num: usize) {
-            self.clauses.reserve(cla_num);
+            self.db.clauses.reserve(cla_num);
         }
         // Reserve the space of variables
         /// # Arguments
         /// * `var_num` - The number of variable
         pub fn reserve_variable(&mut self, var_num: usize) {
             self.que.reserve(var_num);
-            self.clauses.reserve(var_num);
+            self.db.clauses.reserve(var_num);
             self.reason.reserve(var_num);
             self.level.reserve(var_num);
             self.assigns.reserve(var_num);
@@ -958,7 +1033,7 @@ pub mod solver {
                 return *status;
             }
             let start = Instant::now();
-            let mut max_learnt_clause = self.clauses.len() as f64 * 0.3;
+            let mut max_learnt_clause = self.db.clauses.len() as f64 * 0.3;
             let mut conflict_cnt = 0;
             let mut restart_limit = 100.0;
 
@@ -991,7 +1066,7 @@ pub mod solver {
                         self.skip_simplify = true;
                     }
 
-                    if max_learnt_clause as usize <= self.learnts.len() {
+                    if max_learnt_clause as usize <= self.db.learnts.len() {
                         self.reduce_learnts();
                         max_learnt_clause *= 1.1;
                     }
