@@ -22,7 +22,7 @@ fn print_result<W: std::io::Write>(
             } else {
                 writeln!(writer, "s SATISFIABLE")?;
             }
-            for (v, &b) in solver.assigns.iter().enumerate() {
+            for (v, &b) in solver.models.iter().enumerate() {
                 let res = if b == LitBool::True {
                     (v + 1) as i32
                 } else {
@@ -82,7 +82,7 @@ fn main() {
 
             if let Some(var_num) = result.var_num {
                 solver.reserve_variable(var_num);
-                while var_num > solver.assigns.len() {
+                while var_num > solver.models.len() {
                     solver.new_var();
                 }
             }
