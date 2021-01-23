@@ -1,6 +1,6 @@
 pub mod solver {
-
     use std::{
+        cmp::Ordering,
         collections::{HashMap, VecDeque},
         ops::{Deref, DerefMut, Index, IndexMut},
         time::{Duration, Instant},
@@ -47,23 +47,37 @@ pub mod solver {
 
     // Clause //
 
-    #[derive(Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+    #[derive(Debug, Default, PartialEq, PartialOrd)]
     pub struct Clause {
         data: Vec<Lit>,
+        activity: f32,
+        learnt: bool,
         free: bool, // will be deleted
     }
     impl Clause {
         fn new(clause: &[Lit]) -> Clause {
             Clause {
                 data: clause.to_vec(),
+                activity: 0.0,
+                learnt: false,
                 free: false,
             }
+        }
+        fn with_learnt(mut self, learnt: bool) -> Clause {
+            self.learnt = learnt;
+            self
         }
         fn swap(&mut self, x: usize, y: usize) {
             self.data.swap(x, y);
         }
         fn len(&self) -> usize {
             self.data.len()
+        }
+        fn activity(&self) -> f32 {
+            self.activity
+        }
+        fn learnt(&self) -> bool {
+            self.learnt
         }
         fn byte(&self) -> usize {
             std::mem::size_of::<Lit>() * self.data.capacity() + std::mem::size_of::<Clause>()
@@ -111,16 +125,26 @@ pub mod solver {
 
     #[derive(Debug, Default, PartialEq, Eq, PartialOrd, Ord, Copy, Clone, Hash)]
     struct CRef(usize);
-    #[derive(Debug, Default)]
+    #[derive(Debug)]
     struct ClauseDB {
         // original
         clauses: Vec<CRef>,
         // learnts
         learnts: Vec<CRef>,
         db: Vec<Clause>,
+        clause_inc: f32,
         total: usize,
         wasted: usize,
     }
+
+    impl Default for ClauseDB {
+        fn default() -> Self {
+            let mut clause = ClauseDB::new();
+            clause.clause_inc = 1.0;
+            clause
+        }
+    }
+
     impl Deref for ClauseDB {
         type Target = [Clause];
         fn deref(&self) -> &Self::Target {
@@ -153,6 +177,7 @@ pub mod solver {
             ClauseDB {
                 clauses: Vec::new(),
                 learnts: Vec::new(),
+                clause_inc: 1.0,
                 db: Vec::new(),
                 total: 0,
                 wasted: 0,
@@ -183,6 +208,28 @@ pub mod solver {
             &mut self[cr]
         }
 
+        fn bump_activity(&mut self, cr: CRef) {
+            debug_assert!(self[cr].learnt());
+            debug_assert!(self.clause_inc >= 0.0);
+            self[cr].activity += self.clause_inc;
+            if self[cr].activity() > 1e20 {
+                // Rescale
+                let n: usize = self.learnts.len();
+                for i in 0..n {
+                    let x = self.learnts[i];
+                    let mut clause = &mut self[x];
+                    debug_assert!(clause.learnt());
+                    clause.activity *= 1e-20;
+                }
+
+                self.clause_inc *= 1e-20;
+            }
+        }
+
+        fn decay_inc(&mut self) {
+            self.clause_inc *= 1.0 / 0.999;
+        }
+
         pub fn push(&mut self, lits: &[Lit], learnt: bool) -> CRef {
             let cref = self.alloc();
             if learnt {
@@ -190,7 +237,7 @@ pub mod solver {
             } else {
                 self.clauses.push(cref);
             }
-            let clause = Clause::new(lits);
+            let clause = Clause::new(lits).with_learnt(learnt);
             self.total += clause.byte();
             self.db.push(clause);
             cref
@@ -771,14 +818,21 @@ pub mod solver {
                 .db
                 .learnts
                 .iter()
-                .map(|&cr| (self.db[cr].len(), cr))
+                .map(|&cr| (self.db[cr].activity(), self.db[cr].len(), cr))
                 .collect();
-            learnts.sort();
+            learnts.sort_by(|x, y| {
+                let len_order = x.1.cmp(&y.1);
+                if len_order == Ordering::Equal {
+                    return y.0.partial_cmp(&x.0).unwrap();
+                }
+                len_order
+            });
+
             //clear learnts
             self.db.learnts.clear();
-
             let n = learnts.len();
-            for (i, (len, cr)) in learnts.into_iter().enumerate() {
+
+            for (i, (_act, len, cr)) in learnts.into_iter().enumerate() {
                 if i >= n / 2 && len > 2 && !self.locked(cr) {
                     self.detach_clause(cr);
                 } else {
@@ -958,7 +1012,12 @@ pub mod solver {
 
             let mut same_level_cnt = 0;
 
+            if self.db[confl].learnt() {
+                self.db.bump_activity(confl);
+            }
+
             let clause = &self.db[confl];
+
             debug_assert!(!clause.free);
             // implication graph nodes that are start point from a conflict clause.
             for p in clause.iter() {
@@ -989,6 +1048,7 @@ pub mod solver {
                     }
                     self.seen[v] = false;
                     self.order_heap.bump_activity(v);
+
                     debug_assert_eq!(self.level[v], current_level);
                     same_level_cnt -= 1;
                     // There is no variables that are at the conflict level
@@ -999,6 +1059,9 @@ pub mod solver {
 
                     debug_assert!(self.reason[v].is_some());
                     let reason = self.reason[v].as_ref().unwrap();
+                    if self.db[*reason].learnt() {
+                        self.db.bump_activity(*reason);
+                    }
 
                     let clause = &self.db[*reason];
                     for p in clause.iter().skip(1) {
@@ -1056,8 +1119,8 @@ pub mod solver {
                 self.enqueue(learnt_clause[0], None);
             } else {
                 let first = learnt_clause[0];
-
                 let cr = self.add_clause_db(&learnt_clause, true);
+                self.db.bump_activity(cr);
                 self.enqueue(first, Some(cr));
             }
 
@@ -1117,6 +1180,7 @@ pub mod solver {
                     conflict_cnt += 1;
                     self.analyze(confl);
                     self.order_heap.decay_inc();
+                    self.db.decay_inc();
                 } else {
                     // No Conflict
                     if conflict_cnt as f64 >= restart_limit {
