@@ -50,21 +50,34 @@ pub mod solver {
     #[derive(Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
     pub struct Clause {
         data: Vec<Lit>,
+        lbd: usize, // literal block distance
+        learnt: bool,
         free: bool, // will be deleted
     }
     impl Clause {
         fn new(clause: &[Lit]) -> Clause {
             Clause {
                 data: clause.to_vec(),
+                lbd: 0,
+                learnt: false,
                 free: false,
             }
         }
+
         fn swap(&mut self, x: usize, y: usize) {
             self.data.swap(x, y);
         }
         fn len(&self) -> usize {
             self.data.len()
         }
+        fn lbd(&self) -> usize {
+            self.lbd
+        }
+
+        fn learnt(&self) -> bool {
+            self.learnt
+        }
+
         fn byte(&self) -> usize {
             std::mem::size_of::<Lit>() * self.data.capacity() + std::mem::size_of::<Clause>()
         }
@@ -493,6 +506,7 @@ pub mod solver {
         watchers: Vec<Vec<CRef>>,
         // a clause that CRef points make a variable forced to be assigned
         reason: Vec<Option<CRef>>,
+        // a variable for analyze
         seen: Vec<bool>,
         // analyze variables
         ccmin_stack: VecDeque<Lit>,
@@ -504,6 +518,11 @@ pub mod solver {
         que: VecDeque<Lit>,
         // the head index of `que` points unprocessed elements
         head: usize,
+
+        // lbd
+        perm_diff: Vec<usize>,
+        perm_counter: usize,
+
         // the solver status. this value may be set by the functions `add_clause` and `solve`.
         pub status: Option<Status>,
         order_heap: Heap,
@@ -522,6 +541,8 @@ pub mod solver {
                 que: VecDeque::new(),
                 head: 0,
                 db: ClauseDB::new(),
+                perm_counter: 0,
+                perm_diff: Vec::new(),
                 reason: vec![None; n],
                 level: vec![TOP_LEVEL; n],
                 seen: vec![false; n],
@@ -576,6 +597,7 @@ pub mod solver {
             self.level.push(0);
             self.order_heap.push(v);
             self.seen.push(false);
+            self.perm_diff.push(0);
             // for literals
             self.watchers.push(Vec::new());
             self.watchers.push(Vec::new());
@@ -771,15 +793,16 @@ pub mod solver {
                 .db
                 .learnts
                 .iter()
-                .map(|&cr| (self.db[cr].len(), cr))
+                .map(|&cr| (self.db[cr].len(), self.db[cr].lbd(), cr))
                 .collect();
             learnts.sort();
             //clear learnts
             self.db.learnts.clear();
 
             let n = learnts.len();
-            for (i, (len, cr)) in learnts.into_iter().enumerate() {
-                if i >= n / 2 && len > 2 && !self.locked(cr) {
+            for (i, (len, lbd, cr)) in learnts.into_iter().enumerate() {
+                debug_assert!(0 < lbd && lbd <= len);
+                if i >= n / 2 && (lbd > 2 && len > 2) && !self.locked(cr) {
                     self.detach_clause(cr);
                 } else {
                     self.db.learnts.push(cr);
@@ -948,6 +971,22 @@ pub mod solver {
             self.ccmin_clear.clear();
             learnt_clause.truncate(new_size);
         }
+
+        fn compute_lbd(&mut self, cr: CRef) -> usize {
+            self.perm_counter += 1;
+            let mut lbd = 0;
+            for lit in self.db[cr].iter() {
+                let level = self.level[lit.var()];
+
+                if self.perm_diff[level] != self.perm_counter {
+                    self.perm_diff[level] = self.perm_counter;
+                    lbd += 1;
+                }
+            }
+            debug_assert!(lbd <= self.db[cr].len());
+            lbd
+        }
+
         /// Analyze a conflict clause and deduce a learnt clause to avoid a current conflict
         fn analyze(&mut self, confl: CRef) {
             // seen must be clear
@@ -958,29 +997,42 @@ pub mod solver {
 
             let mut same_level_cnt = 0;
 
-            let clause = &self.db[confl];
-            debug_assert!(!clause.free);
             // implication graph nodes that are start point from a conflict clause.
-            for p in clause.iter() {
-                let var = p.var();
-                debug_assert!(self.eval(*p) != LitBool::Undef);
+            {
+                if self.db[confl].learnt() && self.db[confl].lbd() > 2 {
+                    let lbd = self.compute_lbd(confl);
+                    if lbd + 1 < self.db[confl].lbd() {
+                        self.db[confl].lbd = lbd;
+                    }
+                }
+                let clause = &self.db[confl];
 
-                self.order_heap.bump_activity(var);
-                // already checked
-                self.seen[var] = true;
+                debug_assert!(!clause.free);
 
-                //debug_assert!(self.level[var] <= current_level);
-                if self.level[var] < current_level {
-                    learnt_clause.push(*p);
-                } else {
-                    same_level_cnt += 1;
+                for p in clause.iter() {
+                    let var = p.var();
+                    debug_assert!(self.eval(*p) != LitBool::Undef);
+
+                    self.order_heap.bump_activity(var);
+                    // already checked
+                    self.seen[var] = true;
+
+                    //debug_assert!(self.level[var] <= current_level);
+                    if self.level[var] < current_level {
+                        learnt_clause.push(*p);
+                    } else {
+                        same_level_cnt += 1;
+                    }
                 }
             }
 
             // Traverse an implication graph to 1-UIP(unique implication point)
             let first_uip = {
                 let mut p = None;
-                for &lit in self.que.iter().rev() {
+
+                let n: usize = self.que.len();
+                for i in (0..n).rev() {
+                    let lit = self.que[i];
                     let v = lit.var();
 
                     // Skip a variable that isn't checked.
@@ -998,9 +1050,15 @@ pub mod solver {
                     }
 
                     debug_assert!(self.reason[v].is_some());
-                    let reason = self.reason[v].as_ref().unwrap();
+                    let reason = *self.reason[v].as_ref().unwrap();
+                    if self.db[reason].learnt() && self.db[reason].lbd() > 2 {
+                        let lbd = self.compute_lbd(reason);
+                        if lbd + 1 < self.db[reason].lbd() {
+                            self.db[reason].lbd = lbd;
+                        }
+                    }
 
-                    let clause = &self.db[*reason];
+                    let clause = &self.db[reason];
                     for p in clause.iter().skip(1) {
                         let var = p.var();
                         // already checked
@@ -1058,6 +1116,7 @@ pub mod solver {
                 let first = learnt_clause[0];
 
                 let cr = self.add_clause_db(&learnt_clause, true);
+                self.db[cr].lbd = self.compute_lbd(cr);
                 self.enqueue(first, Some(cr));
             }
 
