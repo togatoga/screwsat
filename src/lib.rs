@@ -1,7 +1,7 @@
 pub mod solver {
 
     use std::{
-        collections::VecDeque,
+        collections::{HashMap, VecDeque},
         ops::{Deref, DerefMut, Index, IndexMut},
         time::{Duration, Instant},
         vec,
@@ -109,7 +109,7 @@ pub mod solver {
 
     // Clause //
 
-    #[derive(Debug, Default, PartialEq, Eq, PartialOrd, Ord, Copy, Clone)]
+    #[derive(Debug, Default, PartialEq, Eq, PartialOrd, Ord, Copy, Clone, Hash)]
     struct CRef(usize);
     #[derive(Debug, Default)]
     struct ClauseDB {
@@ -194,6 +194,69 @@ pub mod solver {
             self.total += clause.byte();
             self.db.push(clause);
             cref
+        }
+
+        fn need_collect_garbage(&mut self) -> bool {
+            self.wasted() * 10 > self.total() * 2
+        }
+
+        fn collect_garbage_if_needed(
+            &mut self,
+            watchers: &mut Vec<Vec<CRef>>,
+            reason: &mut Vec<Option<CRef>>,
+            que: &mut VecDeque<Lit>,
+        ) {
+            if self.need_collect_garbage() {
+                self.collect_garbage(watchers, reason, que);
+            }
+        }
+        fn collect_garbage(
+            &mut self,
+            watchers: &mut Vec<Vec<CRef>>,
+            reason: &mut Vec<Option<CRef>>,
+            que: &mut VecDeque<Lit>,
+        ) {
+            // assumed that Watcher doesn't have freeded CRef
+
+            let mut map = HashMap::new();
+            //cref
+
+            self.wasted = 0;
+            self.total = 0;
+            for (cr, clause) in self.db.iter().enumerate() {
+                if !clause.free {
+                    map.insert(CRef(cr), CRef(map.len()));
+                    self.total += clause.byte();
+                }
+            }
+            // Watchers
+            for watcher in watchers.iter_mut() {
+                for cr in watcher.iter_mut() {
+                    debug_assert!(!self[*cr].free);
+                    *cr = *map.get(cr).unwrap();
+                }
+            }
+            // Reasons
+            for lit in que.iter() {
+                let v = lit.var();
+                reason[v] = reason[v].map(|cr| *map.get(&cr).unwrap());
+            }
+
+            // Original
+            for cr in self.clauses.iter_mut() {
+                debug_assert!(!self.db[cr.0].free);
+                *cr = *map.get(cr).unwrap();
+            }
+
+            // Learnts
+            for cr in self.learnts.iter_mut() {
+                debug_assert!(!self.db[cr.0].free);
+                *cr = *map.get(cr).unwrap();
+            }
+
+            // remove all freeded clauses
+            self.db.retain(|c| !c.free);
+            assert!(self.db.len() == map.len());
         }
     }
 
@@ -428,7 +491,7 @@ pub mod solver {
         db: ClauseDB,
         // clauses that may be conflicted or propagated if a `lit` is false.
         watchers: Vec<Vec<CRef>>,
-        // a clause index represents that a variable is forced to be assigned.
+        // a clause that CRef points make a variable forced to be assigned
         reason: Vec<Option<CRef>>,
         seen: Vec<bool>,
         // analyze variables
@@ -498,11 +561,8 @@ pub mod solver {
             self.assigns[lit.var()] = LitBool::from(lit.neg() as i8);
 
             self.reason[lit.var()] = reason;
-            self.level[lit.var()] = if let Some(last) = self.que.back() {
-                self.level[last.var()]
-            } else {
-                TOP_LEVEL
-            };
+            self.level[lit.var()] = self.current_level();
+
             self.que.push_back(lit);
         }
 
@@ -718,8 +778,7 @@ pub mod solver {
             self.db.learnts.clear();
 
             let n = learnts.len();
-            for (i, (_, cr)) in learnts.into_iter().enumerate() {
-                let len = self.db[cr].len();
+            for (i, (len, cr)) in learnts.into_iter().enumerate() {
                 if i >= n / 2 && len > 2 && !self.locked(cr) {
                     self.detach_clause(cr);
                 } else {
@@ -727,7 +786,8 @@ pub mod solver {
                 }
             }
 
-            // A ratio of the fragmentation is greater than 0.2
+            self.db
+                .collect_garbage_if_needed(&mut self.watchers, &mut self.reason, &mut self.que);
         }
 
         fn pop_queue_until(&mut self, backtrack_level: usize) {
@@ -809,6 +869,9 @@ pub mod solver {
                 }
                 self.db.clauses.truncate(new_size);
             }
+
+            self.db
+                .collect_garbage_if_needed(&mut self.watchers, &mut self.reason, &mut self.que);
         }
 
         fn lit_redundant(&mut self, lit: Lit, abstract_levels: u32) -> bool {
