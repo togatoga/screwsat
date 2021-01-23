@@ -587,7 +587,7 @@ pub mod solver {
         fn current_level(&self) -> usize {
             self.que
                 .back()
-                .map(|x| self.level[x.var()])
+                .map(|x| self.level(x.var()))
                 .unwrap_or(TOP_LEVEL)
         }
 
@@ -891,14 +891,12 @@ pub mod solver {
 
         fn pop_queue_until(&mut self, backtrack_level: usize) {
             while let Some(p) = self.vardata.que.back() {
-                if self.vardata.level[p.var()] > backtrack_level {
+                if self.vardata.level(p.var()) > backtrack_level {
                     if !self.order_heap.in_heap(p.var()) {
                         self.order_heap.push(p.var());
                     }
-                    self.vardata.polarity[p.var()] = match self.vardata.assigns[p.var()] {
-                        LitBool::True => true,
-                        _ => false,
-                    };
+                    self.vardata.polarity[p.var()] = matches!(self.vardata.assigns[p.var()], LitBool::True);
+
                     self.vardata.assigns[p.var()] = LitBool::Undef;
                     self.vardata.reason[p.var()] = None;
                     self.vardata.level[p.var()] = TOP_LEVEL;
@@ -991,11 +989,11 @@ pub mod solver {
                 let clause = &self.db[*cr];
                 debug_assert!(clause[0] == !x);
                 for c in clause.iter().skip(1) {
-                    if !seen[c.var()] && self.vardata.level[c.var()] > TOP_LEVEL {
+                    if !seen[c.var()] && self.vardata.level(c.var()) > TOP_LEVEL {
                         // If a 'c' is decided by a level that is different from conflict literals.
                         // abstract_level(c) & abstract_levels == 0
                         if self.vardata.reason[c.var()].is_some()
-                            && (Solver::abstract_level(self.vardata.level[c.var()])
+                            && (Solver::abstract_level(self.vardata.level(c.var()))
                                 & abstract_levels)
                                 != 0
                         {
@@ -1030,7 +1028,7 @@ pub mod solver {
                 .iter()
                 .skip(1)
                 .fold(0, |als: u32, x| {
-                    als | Solver::abstract_level(self.vardata.level[x.var()])
+                    als | Solver::abstract_level(self.vardata.level(x.var()))
                 });
 
             // Simplify conflict clauses
@@ -1085,7 +1083,7 @@ pub mod solver {
                 self.analyzer.seen[var] = true;
 
                 //debug_assert!(self.vardata.level[var] <= current_level);
-                if self.vardata.level[var] < current_level {
+                if self.vardata.level(var) < current_level {
                     self.analyzer.learnt_clause.push(*p);
                 } else {
                     same_level_cnt += 1;
@@ -1127,8 +1125,8 @@ pub mod solver {
                             continue;
                         }
                         self.analyzer.seen[var] = true;
-                        debug_assert!(self.vardata.level[var] <= current_level);
-                        if self.vardata.level[var] < current_level {
+                        debug_assert!(self.vardata.level(var) <= current_level);
+                        if self.vardata.level(var) < current_level {
                             self.analyzer.learnt_clause.push(*p);
                         } else {
                             same_level_cnt += 1;
@@ -1155,10 +1153,12 @@ pub mod solver {
                 TOP_LEVEL
             } else {
                 let mut max_idx = 1;
-                let mut max_level = self.vardata.level[self.analyzer.learnt_clause[max_idx].var()];
+                let mut max_level = self
+                    .vardata
+                    .level(self.analyzer.learnt_clause[max_idx].var());
                 for (i, lit) in self.analyzer.learnt_clause.iter().enumerate().skip(2) {
-                    if self.vardata.level[lit.var()] > max_level {
-                        max_level = self.vardata.level[lit.var()];
+                    if self.vardata.level(lit.var()) > max_level {
+                        max_level = self.vardata.level(lit.var());
                         max_idx = i;
                     }
                 }
