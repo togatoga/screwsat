@@ -177,7 +177,7 @@ pub mod solver {
             ClauseDB {
                 clauses: Vec::new(),
                 learnts: Vec::new(),
-                clause_inc: 1.0,
+                clause_inc: 0.0,
                 db: Vec::new(),
                 total: 0,
                 wasted: 0,
