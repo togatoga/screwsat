@@ -105,7 +105,7 @@ mod tests {
                     assert!(false);
                 }
                 if status == Status::Sat {
-                    if !sat_model_check(&cnf.clauses, &solver.assigns) {
+                    if !sat_model_check(&cnf.clauses, &solver.models) {
                         eprintln!(
                             "Assignments are wrong!! cnf: {}, Result: {:?} Expected: {:?}",
                             path_str, status, expected

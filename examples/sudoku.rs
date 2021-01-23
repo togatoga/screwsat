@@ -172,7 +172,7 @@ fn main() {
         match status {
             Status::Sat => {
                 println!("SAT");
-                let result = board_from_assign(sudoku_9.len(), &solver.assigns);
+                let result = board_from_assign(sudoku_9.len(), &solver.models);
                 print_sudoku(&result, &sudoku_9);
             }
             Status::Unsat => {
@@ -212,7 +212,7 @@ fn main() {
         match status {
             Status::Sat => {
                 println!("SAT");
-                let result = board_from_assign(sudoku_16.len(), &solver.assigns);
+                let result = board_from_assign(sudoku_16.len(), &solver.models);
                 print_sudoku(&result, &sudoku_16);
             }
             Status::Unsat => {

@@ -25,7 +25,7 @@ fn main() {
         println!("{:?}", status);
         // print the assignments satisfy a given problem.
         // x1 = false x2 = false x3 = false x4 = true x5 = false
-        solver.assigns.iter().enumerate().for_each(|(var, assign)| {
+        solver.models.iter().enumerate().for_each(|(var, assign)| {
             let b = match assign {
                 LitBool::True => true,
                 _ => false,
