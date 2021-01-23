@@ -527,6 +527,27 @@ pub mod solver {
     }
 
     #[derive(Debug, Default)]
+    struct Analayzer {
+        seen: Vec<bool>,
+        ccmin_stack: Vec<Lit>,
+        ccmin_clear: Vec<Lit>,
+        analyze_toclear: Vec<Lit>,
+        learnt_clause: Vec<Lit>,
+    }
+
+    impl Analayzer {
+        fn new(n: usize) -> Analayzer {
+            Analayzer {
+                seen: vec![false; n],
+                ccmin_stack: Vec::new(),
+                ccmin_clear: Vec::new(),
+                learnt_clause: Vec::new(),
+                analyze_toclear: Vec::new(),
+            }
+        }
+    }
+
+    #[derive(Debug, Default)]
     // A SAT Solver
     pub struct Solver {
         // the number of variables
@@ -538,13 +559,10 @@ pub mod solver {
         db: ClauseDB,
         // clauses that may be conflicted or propagated if a `lit` is false.
         watchers: Vec<Vec<CRef>>,
+        // conflict analyzer
+        analyzer: Analayzer,
         // a clause that CRef points make a variable forced to be assigned
         reason: Vec<Option<CRef>>,
-        seen: Vec<bool>,
-        // analyze variables
-        ccmin_stack: VecDeque<Lit>,
-        // analyze variables
-        ccmin_clear: Vec<Lit>,
         // decision level(0: minimumlevel)
         level: Vec<usize>,
         // assigned variables
@@ -571,9 +589,7 @@ pub mod solver {
                 db: ClauseDB::new(),
                 reason: vec![None; n],
                 level: vec![TOP_LEVEL; n],
-                seen: vec![false; n],
-                ccmin_stack: VecDeque::new(),
-                ccmin_clear: Vec::new(),
+                analyzer: Analayzer::new(n),
                 assigns: vec![LitBool::Undef; n],
                 polarity: vec![false; n],
                 order_heap: Heap::new(n, 1.0),
@@ -622,7 +638,7 @@ pub mod solver {
             self.reason.push(None);
             self.level.push(0);
             self.order_heap.push(v);
-            self.seen.push(false);
+            self.analyzer.seen.push(false);
             // for literals
             self.watchers.push(Vec::new());
             self.watchers.push(Vec::new());
@@ -931,32 +947,34 @@ pub mod solver {
         fn lit_redundant(&mut self, lit: Lit, abstract_levels: u32) -> bool {
             // Check whether a literal can reach a decision variable or unit clause literal.
             // Self-subsume
-            self.ccmin_stack.clear();
-            let top = self.ccmin_clear.len();
-            self.ccmin_stack.push_back(lit);
-            while let Some(x) = self.ccmin_stack.pop_back() {
+            let seen = &mut self.analyzer.seen;
+            let ccmin_stack = &mut self.analyzer.ccmin_stack;
+            let ccmin_clear = &mut self.analyzer.ccmin_clear;
+            ccmin_stack.clear();
+            let top = ccmin_clear.len();
+            ccmin_stack.push(lit);
+            while let Some(x) = ccmin_stack.pop() {
                 let cr = self.reason[x.var()].as_ref().unwrap();
 
                 let clause = &self.db[*cr];
                 debug_assert!(clause[0] == !x);
                 for c in clause.iter().skip(1) {
-                    if !self.seen[c.var()] && self.level[c.var()] > TOP_LEVEL {
+                    if !seen[c.var()] && self.level[c.var()] > TOP_LEVEL {
                         // If a 'c' is decided by a level that is different from conflict literals.
                         // abstract_level(c) & abstract_levels == 0
                         if self.reason[c.var()].is_some()
-                            && (self.abstract_level(*c) & abstract_levels) != 0
+                            && (Solver::abstract_level(self.level[c.var()]) & abstract_levels) != 0
                         {
-                            self.seen[c.var()] = true;
-
-                            self.ccmin_stack.push_back(*c);
-                            self.ccmin_clear.push(*c);
+                            seen[c.var()] = true;
+                            ccmin_stack.push(*c);
+                            ccmin_clear.push(*c);
                         } else {
                             // A 'c' is a decision variable or unit clause literal.
                             // which means a "lit" isn't redundant
-                            for lit in self.ccmin_clear.iter().skip(top) {
-                                self.seen[lit.var()] = false;
+                            for lit in ccmin_clear.iter().skip(top) {
+                                seen[lit.var()] = false;
                             }
-                            self.ccmin_clear.truncate(top);
+                            ccmin_clear.truncate(top);
                             return false;
                         }
                     }
@@ -965,50 +983,54 @@ pub mod solver {
             true
         }
 
-        fn abstract_level(&self, x: Lit) -> u32 {
-            1 << (self.level[x.var()] as u32 & 31)
+        fn abstract_level(level: usize) -> u32 {
+            1 << (level as u32 & 31)
         }
-        fn minimize_conflict_clause(&mut self, learnt_clause: &mut Vec<Lit>) {
-            debug_assert!(self.ccmin_stack.is_empty());
-            debug_assert!(self.ccmin_clear.is_empty());
+        fn minimize_conflict_clause(&mut self) {
+            debug_assert!(self.analyzer.ccmin_stack.is_empty());
+            debug_assert!(self.analyzer.ccmin_clear.is_empty());
 
-            let abstract_levels = learnt_clause
+            let abstract_levels = self
+                .analyzer
+                .learnt_clause
                 .iter()
                 .skip(1)
-                .fold(0, |als: u32, x| als | self.abstract_level(*x));
+                .fold(0, |als: u32, x| {
+                    als | Solver::abstract_level(self.level[x.var()])
+                });
 
             // Simplify conflict clauses
-            let n: usize = learnt_clause.len();
+            let n: usize = self.analyzer.learnt_clause.len();
             let mut new_size = 1;
             for i in 1..n {
-                let x = learnt_clause[i].var();
+                let lit = self.analyzer.learnt_clause[i];
                 let mut redundant = false;
 
                 // Traverse a conflict literal to check wheter a literal is redundant.
-                if self.reason[x].is_some() {
-                    redundant = self.lit_redundant(learnt_clause[i], abstract_levels);
+                if self.reason[lit.var()].is_some() {
+                    redundant = self.lit_redundant(lit, abstract_levels);
                 }
 
                 if !redundant {
-                    learnt_clause[new_size] = learnt_clause[i];
+                    self.analyzer.learnt_clause[new_size] = lit;
                     new_size += 1;
                 }
             }
             // clear all
-            for lit in self.ccmin_clear.iter() {
-                self.seen[lit.var()] = false;
+            for lit in self.analyzer.ccmin_clear.iter() {
+                self.analyzer.seen[lit.var()] = false;
             }
-            self.ccmin_stack.clear();
-            self.ccmin_clear.clear();
-            learnt_clause.truncate(new_size);
+            self.analyzer.ccmin_stack.clear();
+            self.analyzer.ccmin_clear.clear();
+            self.analyzer.learnt_clause.truncate(new_size);
         }
         /// Analyze a conflict clause and deduce a learnt clause to avoid a current conflict
         fn analyze(&mut self, confl: CRef) {
             // seen must be clear
-            debug_assert!(self.seen.iter().all(|&x| !x));
+            debug_assert!(self.analyzer.seen.iter().all(|&x| !x));
 
             let current_level = self.current_level();
-            let mut learnt_clause = vec![];
+            self.analyzer.learnt_clause.clear();
 
             let mut same_level_cnt = 0;
 
@@ -1026,11 +1048,11 @@ pub mod solver {
 
                 self.order_heap.bump_activity(var);
                 // already checked
-                self.seen[var] = true;
+                self.analyzer.seen[var] = true;
 
                 //debug_assert!(self.level[var] <= current_level);
                 if self.level[var] < current_level {
-                    learnt_clause.push(*p);
+                    self.analyzer.learnt_clause.push(*p);
                 } else {
                     same_level_cnt += 1;
                 }
@@ -1043,10 +1065,10 @@ pub mod solver {
                     let v = lit.var();
 
                     // Skip a variable that isn't checked.
-                    if !self.seen[v] {
+                    if !self.analyzer.seen[v] {
                         continue;
                     }
-                    self.seen[v] = false;
+                    self.analyzer.seen[v] = false;
                     self.order_heap.bump_activity(v);
 
                     debug_assert_eq!(self.level[v], current_level);
@@ -1067,13 +1089,13 @@ pub mod solver {
                     for p in clause.iter().skip(1) {
                         let var = p.var();
                         // already checked
-                        if self.seen[var] {
+                        if self.analyzer.seen[var] {
                             continue;
                         }
-                        self.seen[var] = true;
+                        self.analyzer.seen[var] = true;
                         debug_assert!(self.level[var] <= current_level);
                         if self.level[var] < current_level {
-                            learnt_clause.push(*p);
+                            self.analyzer.learnt_clause.push(*p);
                         } else {
                             same_level_cnt += 1;
                         }
@@ -1085,27 +1107,29 @@ pub mod solver {
             // p is 1-UIP.
             {
                 let p = first_uip.unwrap();
-                learnt_clause.push(!p);
-                let n = learnt_clause.len();
-                learnt_clause.swap(0, n - 1);
+                self.analyzer.learnt_clause.push(!p);
+                let n = self.analyzer.learnt_clause.len();
+                self.analyzer.learnt_clause.swap(0, n - 1);
             }
 
-            let analyze_clear = learnt_clause.clone();
-            self.minimize_conflict_clause(&mut learnt_clause);
+            self.analyzer
+                .analyze_toclear
+                .clone_from(&self.analyzer.learnt_clause);
+            self.minimize_conflict_clause();
 
-            let backtrack_level = if learnt_clause.len() == 1 {
+            let backtrack_level = if self.analyzer.learnt_clause.len() == 1 {
                 TOP_LEVEL
             } else {
                 let mut max_idx = 1;
-                let mut max_level = self.level[learnt_clause[max_idx].var()];
-                for (i, lit) in learnt_clause.iter().enumerate().skip(2) {
+                let mut max_level = self.level[self.analyzer.learnt_clause[max_idx].var()];
+                for (i, lit) in self.analyzer.learnt_clause.iter().enumerate().skip(2) {
                     if self.level[lit.var()] > max_level {
                         max_level = self.level[lit.var()];
                         max_idx = i;
                     }
                 }
 
-                learnt_clause.swap(1, max_idx);
+                self.analyzer.learnt_clause.swap(1, max_idx);
                 max_level
             };
 
@@ -1113,20 +1137,20 @@ pub mod solver {
             self.pop_queue_until(backtrack_level);
 
             // propagate it by a new learnt clause
-            if learnt_clause.len() == 1 {
+            let first = self.analyzer.learnt_clause[0];
+            if self.analyzer.learnt_clause.len() == 1 {
                 debug_assert_eq!(backtrack_level, TOP_LEVEL);
                 self.skip_simplify = false;
-                self.enqueue(learnt_clause[0], None);
+                self.enqueue(first, None);
             } else {
-                let first = learnt_clause[0];
-                let cr = self.add_clause_db(&learnt_clause, true);
+                let cr = self.add_clause_db(&self.analyzer.learnt_clause.clone(), true);
                 self.db.bump_activity(cr);
                 self.enqueue(first, Some(cr));
             }
 
             // Clear seen
-            for lit in analyze_clear {
-                self.seen[lit.var()] = false;
+            for lit in self.analyzer.analyze_toclear.iter() {
+                self.analyzer.seen[lit.var()] = false;
             }
         }
         fn define(&self, x: Var) -> bool {
