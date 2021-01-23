@@ -1080,7 +1080,7 @@ pub mod solver {
                     }
 
                     debug_assert!(self.reason[v].is_some());
-                    let reason = self.reason[v].as_ref().unwrap();
+                    let reason = self.reason[v].as_ref().expect("No reason");
                     if self.db[*reason].learnt() {
                         self.db.bump_activity(*reason);
                     }
@@ -1106,7 +1106,7 @@ pub mod solver {
 
             // p is 1-UIP.
             {
-                let p = first_uip.unwrap();
+                let p = first_uip.expect("Not found first uip");
                 self.analyzer.learnt_clause.push(!p);
                 let n = self.analyzer.learnt_clause.len();
                 self.analyzer.learnt_clause.swap(0, n - 1);
