@@ -8,6 +8,7 @@ repository = "https://github.com/togatoga/screwsat"
 description = "A simple condlict driven clause learning sat solver"
 license = "MIT"
 readme = "README.md"
+exclude = ["cnf"]
 
 categories = ["algorithms", "command-line-utilities"]
 keywords = ["solver", "satisfiability", "sat"]
