@@ -1,6 +1,5 @@
 pub mod solver {
     use std::{
-        cmp::Ordering,
         collections::HashMap,
         ops::{Deref, DerefMut, Index, IndexMut},
         time::{Duration, Instant},
@@ -648,6 +647,96 @@ pub mod solver {
         }
     }
 
+    #[derive(Debug, Clone, Copy)]
+    struct RestartStrategy {
+        /// The initial restart limit. (default 100)
+        first: i32,
+        /// The factor with which the restart limit is multiplied in each restart. (default 1.5)
+        inc: f64,
+    }
+
+    impl Default for RestartStrategy {
+        fn default() -> Self {
+            RestartStrategy {
+                first: 100,
+                inc: 2.0,
+            }
+        }
+    }
+
+    impl RestartStrategy {
+        fn luby(&mut self, mut x: i32) -> f64 {
+            // Find the finite subsequence that contains index 'x', and the
+            // size of that subsequence:
+            let mut size = 1;
+            let mut seq = 0;
+            while size < x + 1 {
+                seq += 1;
+                size = 2 * size + 1;
+            }
+
+            while size - 1 != x {
+                size = (size - 1) >> 1;
+                seq -= 1;
+                x %= size;
+            }
+            f64::powi(self.inc, seq) * self.first as f64
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    struct LearntSizeStrategy {
+        /// The intitial limit for learnt clauses is a factor of the original clauses. (default 1 / 3)
+        factor: f64,
+        /// The limit for learnt clauses is multiplied with this factor each restart. (default 1.1)
+        inc: f64,
+        /// (default 1.5)
+        adjust_inc: f64,
+        adjust_start_confl: i32,
+        adjust_confl: f64,
+
+        adjust_cnt: i32,
+        max_learnts: f64,
+    }
+
+    impl Default for LearntSizeStrategy {
+        fn default() -> Self {
+            LearntSizeStrategy {
+                factor: 1.0 / 3.0,
+                inc: 1.1,
+                adjust_start_confl: 100,
+                adjust_inc: 1.5,
+                adjust_cnt: 0,
+                adjust_confl: 0.0,
+                max_learnts: 0.0,
+            }
+        }
+    }
+
+    impl LearntSizeStrategy {
+        fn init(&mut self, num_clauses: usize) {
+            self.max_learnts = num_clauses as f64 * self.factor;
+            self.adjust_confl = self.adjust_start_confl as f64;
+            self.reset_adjust_cnt();
+        }
+        fn dec_adjust_cnt(&mut self) {
+            self.adjust_cnt -= 1;
+        }
+        fn adjust_if_needed(&mut self) {
+            if self.adjust_cnt <= 0 {
+                self.adjust();
+            }
+        }
+        fn reset_adjust_cnt(&mut self) {
+            self.adjust_cnt = self.adjust_confl as i32;
+        }
+        fn adjust(&mut self) {
+            self.adjust_confl *= self.adjust_inc;
+            self.reset_adjust_cnt();
+            self.max_learnts *= self.inc;
+        }
+    }
+
     #[derive(Debug, Default, Clone, Copy)]
     struct Watcher {
         cref: CRef,
@@ -674,6 +763,9 @@ pub mod solver {
         skip_simplify: bool,
         order_heap: Heap,
 
+        restart_strat: RestartStrategy,
+        learnt_size_start: LearntSizeStrategy,
+
         // the model of assigns.
         pub models: Vec<LitBool>,
         // the solver status. this value may be set by the functions `add_clause` and `solve`.
@@ -693,6 +785,8 @@ pub mod solver {
                 analyzer: Analayzer::new(n),
                 vardata: VarData::new(n),
                 order_heap: Heap::new(n, 1.0),
+                restart_strat: RestartStrategy::default(),
+                learnt_size_start: LearntSizeStrategy::default(),
                 watchers: vec![vec![]; 2 * n],
                 status: None,
                 models: vec![LitBool::Undef; n],
@@ -912,19 +1006,19 @@ pub mod solver {
                 .map(|&cr| (self.db[cr].activity(), self.db[cr].len(), cr))
                 .collect();
             learnts.sort_by(|x, y| {
-                let len_order = x.1.cmp(&y.1);
-                if len_order == Ordering::Equal {
-                    return y.0.partial_cmp(&x.0).unwrap();
-                }
-                len_order
+                Ord::cmp(&(x.1 <= 2), &(y.1 <= 2))
+                    .then(PartialOrd::partial_cmp(&x.0, &y.0).expect("NaN activity"))
             });
-
-            //clear learnts
-            self.db.learnts.clear();
             let n = learnts.len();
 
-            for (i, (_act, len, cr)) in learnts.into_iter().enumerate() {
-                if i >= n / 2 && len > 2 && !self.locked(cr) {
+            let extra_lim = self.db.clause_inc / n as f32;
+            debug_assert!(!extra_lim.is_nan());
+            
+            self.db.learnts.clear();
+
+            for (i, (act, len, cr)) in learnts.into_iter().enumerate() {
+                debug_assert!(!act.is_nan());
+                if (i < n / 2 || act < extra_lim) && len > 2 && !self.locked(cr) {
                     self.detach_clause(cr);
                 } else {
                     self.db.learnts.push(cr);
@@ -983,8 +1077,11 @@ pub mod solver {
             self.db.free(cr);
         }
 
-        fn simplify(&mut self) {
+        fn simplify(&mut self) -> bool {
             debug_assert!(self.vardata.trail.decision_level() == TOP_LEVEL);
+            if self.propagate().is_some() {
+                return false;
+            }
             {
                 // learnts
                 let n: usize = self.db.learnts.len();
@@ -1020,6 +1117,8 @@ pub mod solver {
                 &mut self.vardata.reason,
                 &mut self.vardata.trail.stack,
             );
+
+            true
         }
 
         fn lit_redundant(&mut self, cr: CRef, abstract_levels: u32) -> bool {
@@ -1266,52 +1365,41 @@ pub mod solver {
             self.vardata.assigns.reserve(var_num);
         }
 
-        /// Solve a problem and return a enum `Status`.
-        /// # Arguments
-        /// * `time_limit` - The time limitation for searching.
-        /// Exceeding the time limit returns `Indeterminate`
-        pub fn solve(&mut self, time_limit: Option<Duration>) -> Status {
-            if let Some(status) = self.status.as_ref() {
-                return *status;
-            }
-            let start = Instant::now();
-            let mut max_learnt_clause = self.db.clauses.len() as f64 * 0.3;
+        fn search(&mut self, nof_conflicts: i32) -> Status {
             let mut conflict_cnt = 0;
-            let mut restart_limit = 100.0;
-
             loop {
-                if let Some(time_limit) = time_limit {
-                    if start.elapsed() > time_limit {
-                        // exceed the time limit
-                        self.status = Some(Status::Indeterminate);
-                        return Status::Indeterminate;
-                    }
-                }
                 if let Some(confl) = self.propagate() {
                     //Conflict
+                    conflict_cnt += 1;
                     if self.vardata.trail.decision_level() == TOP_LEVEL {
                         self.status = Some(Status::Unsat);
                         return Status::Unsat;
                     }
-                    conflict_cnt += 1;
+
                     self.analyze(confl);
                     self.order_heap.decay_inc();
                     self.db.decay_inc();
+
+                    self.learnt_size_start.dec_adjust_cnt();
+                    self.learnt_size_start.adjust_if_needed();
                 } else {
                     // No Conflict
-                    if conflict_cnt as f64 >= restart_limit {
-                        restart_limit *= 1.1;
+                    if conflict_cnt >= nof_conflicts {
                         self.pop_trail_until(TOP_LEVEL);
+                        return Status::Indeterminate;
                     }
 
                     if self.vardata.trail.decision_level() == TOP_LEVEL && !self.skip_simplify {
-                        self.simplify();
+                        if !self.simplify() {
+                            return Status::Unsat;
+                        }
                         self.skip_simplify = true;
                     }
 
-                    if max_learnt_clause as usize + self.vardata.trail.stack.len() <= self.db.learnts.len() {
+                    if self.learnt_size_start.max_learnts + self.vardata.trail.stack.len() as f64
+                        <= self.db.learnts.len() as f64
+                    {
                         self.reduce_learnts();
-                        max_learnt_clause *= 1.1;
                     }
 
                     // Select a decision variable that isn't decided yet
@@ -1334,6 +1422,33 @@ pub mod solver {
                     }
                 }
             }
+        }
+        /// Solve a problem and return a enum `Status`.
+        /// # Arguments
+        /// * `time_limit` - The time limitation for searching.
+        /// Exceeding the time limit returns `Indeterminate`
+        pub fn solve(&mut self, time_limit: Option<Duration>) -> Status {
+            if let Some(status) = self.status.as_ref() {
+                return *status;
+            }
+            let start = Instant::now();
+            // Initialization
+            self.learnt_size_start.init(self.db.clauses.len());
+            let mut status = Status::Indeterminate;
+            let mut restart_cnt = 0;
+            while status == Status::Indeterminate {
+                if let Some(time_limit) = time_limit {
+                    if start.elapsed() > time_limit {
+                        // exceed the time limit
+                        self.status = Some(Status::Indeterminate);
+                        return Status::Indeterminate;
+                    }
+                }
+                let nof_conflicts = self.restart_strat.luby(restart_cnt) as i32;
+                status = self.search(nof_conflicts);
+                restart_cnt += 1;
+            }
+            status
         }
     }
 }
