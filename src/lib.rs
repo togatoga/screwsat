@@ -539,7 +539,7 @@ pub mod solver {
     #[derive(Debug, Default)]
     struct Analayzer {
         seen: Vec<bool>,
-        ccmin_stack: Vec<Lit>,
+        ccmin_stack: Vec<CRef>,
         ccmin_clear: Vec<Lit>,
         analyze_toclear: Vec<Lit>,
         learnt_clause: Vec<Lit>,
@@ -883,20 +883,10 @@ pub mod solver {
         }
         fn unwatch_clause(&mut self, cref: CRef) {
             let clause = &self.db[cref];
-            let mut cnt = 0;
-            for idx in 0..2 {
-                let p = !clause[idx];
-                let n = self.watchers[p].len();
-                for i in 0..n {
-                    if self.watchers[p][i] == cref {
-                        self.watchers[p].swap_remove(i);
-                        cnt += 1;
-                        break;
-                    }
-                }
-            }
-            assert!(cnt == 2);
-            debug_assert!(cnt == 2);
+            let ws = &mut self.watchers[!clause[0]];
+            ws.swap_remove(ws.iter().position(|&cr| cr == cref).expect("Not found"));
+            let ws = &mut self.watchers[!clause[1]];
+            ws.swap_remove(ws.iter().position(|&cr| cr == cref).expect("Not found"));
         }
         fn reduce_learnts(&mut self) {
             let mut learnts: Vec<_> = self
@@ -944,8 +934,7 @@ pub mod solver {
                 if !self.order_heap.in_heap(x) {
                     self.order_heap.push(x);
                 }
-                self.vardata.polarity[x] = matches!(self.vardata.assigns[x], LitBool::True);
-
+                self.vardata.polarity[x] = p.pos();
                 self.vardata.assigns[x] = LitBool::Undef;
                 self.vardata.reason[x] = None;
                 self.vardata.level[x] = TOP_LEVEL;
@@ -1017,45 +1006,52 @@ pub mod solver {
             );
         }
 
-        fn lit_redundant(&mut self, lit: Lit, abstract_levels: u32) -> bool {
+        fn lit_redundant(&mut self, cr: CRef, abstract_levels: u32) -> bool {
             // Check whether a literal can reach a decision variable or unit clause literal.
             // Self-subsume
             let seen = &mut self.analyzer.seen;
             let ccmin_stack = &mut self.analyzer.ccmin_stack;
             let ccmin_clear = &mut self.analyzer.ccmin_clear;
             ccmin_stack.clear();
-            let top = ccmin_clear.len();
-            ccmin_stack.push(lit);
-            while let Some(x) = ccmin_stack.pop() {
-                let cr = self.vardata.reason[x.var()].as_ref().unwrap();
+            ccmin_stack.push(cr);
 
-                let clause = &self.db[*cr];
-                debug_assert!(clause[0] == !x);
+            let top = ccmin_clear.len();
+            let mut redundant = true;
+            'redundant: while let Some(cr) = ccmin_stack.pop() {
+                let clause = &self.db[cr];
+
                 for c in clause.iter().skip(1) {
                     if !seen[c.var()] && self.vardata.level(c.var()) > TOP_LEVEL {
                         // If a 'c' is decided by a level that is different from conflict literals.
                         // abstract_level(c) & abstract_levels == 0
-                        if self.vardata.reason[c.var()].is_some()
-                            && (Solver::abstract_level(self.vardata.level(c.var()))
-                                & abstract_levels)
-                                != 0
-                        {
+                        let intersect = Solver::abstract_level(self.vardata.level(c.var()))
+                            & abstract_levels
+                            != 0;
+                        if !intersect {
+                            redundant = false;
+                            break 'redundant;
+                        }
+
+                        if let Some(cr) = self.vardata.reason[c.var()] {
                             seen[c.var()] = true;
-                            ccmin_stack.push(*c);
+                            ccmin_stack.push(cr);
                             ccmin_clear.push(*c);
                         } else {
-                            // A 'c' is a decision variable or unit clause literal.
-                            // which means a "lit" isn't redundant
-                            for lit in ccmin_clear.iter().skip(top) {
-                                seen[lit.var()] = false;
-                            }
-                            ccmin_clear.truncate(top);
-                            return false;
+                            redundant = false;
+                            break 'redundant;
                         }
                     }
                 }
             }
-            true
+            if !redundant {
+                // A 'c' is a decision variable or unit clause literal.
+                // which means a "lit" isn't redundant
+                for lit in ccmin_clear.iter().skip(top) {
+                    seen[lit.var()] = false;
+                }
+                ccmin_clear.truncate(top);
+            }
+            redundant
         }
 
         fn abstract_level(level: usize) -> u32 {
@@ -1079,12 +1075,15 @@ pub mod solver {
             let mut new_size = 1;
             for i in 1..n {
                 let lit = self.analyzer.learnt_clause[i];
-                let mut redundant = false;
 
-                // Traverse a conflict literal to check wheter a literal is redundant.
-                if self.vardata.reason[lit.var()].is_some() {
-                    redundant = self.lit_redundant(lit, abstract_levels);
-                }
+                let redundant = {
+                    // Traverse a conflict literal to check wheter a literal is redundant.
+                    if let Some(cr) = self.vardata.reason[lit.var()] {
+                        self.lit_redundant(cr, abstract_levels)
+                    } else {
+                        false
+                    }
+                };
 
                 if !redundant {
                     self.analyzer.learnt_clause[new_size] = lit;
