@@ -258,7 +258,7 @@ pub mod solver {
 
         fn collect_garbage_if_needed(
             &mut self,
-            watchers: &mut Vec<Vec<CRef>>,
+            watchers: &mut Vec<Vec<Watcher>>,
             reason: &mut Vec<Option<CRef>>,
             trail: &mut Vec<Lit>,
         ) {
@@ -268,7 +268,7 @@ pub mod solver {
         }
         fn collect_garbage(
             &mut self,
-            watchers: &mut Vec<Vec<CRef>>,
+            watchers: &mut Vec<Vec<Watcher>>,
             reason: &mut Vec<Option<CRef>>,
             trail: &mut Vec<Lit>,
         ) {
@@ -287,9 +287,9 @@ pub mod solver {
             }
             // Watchers
             for watcher in watchers.iter_mut() {
-                for cr in watcher.iter_mut() {
-                    debug_assert!(!self[*cr].free);
-                    *cr = *map.get(cr).unwrap();
+                for w in watcher.iter_mut() {
+                    debug_assert!(!self[w.cref].free);
+                    w.cref = *map.get(&w.cref).unwrap();
                 }
             }
             // Reasons
@@ -647,6 +647,17 @@ pub mod solver {
             self.trail.push(lit);
         }
     }
+
+    #[derive(Debug, Default, Clone, Copy)]
+    struct Watcher {
+        cref: CRef,
+        blocker: Lit,
+    }
+    impl Watcher {
+        fn new(cref: CRef, blocker: Lit) -> Watcher {
+            Watcher { cref, blocker }
+        }
+    }
     #[derive(Debug, Default)]
     // A SAT Solver
     pub struct Solver {
@@ -655,7 +666,7 @@ pub mod solver {
         // clause data base(original + learnt)
         db: ClauseDB,
         // clauses that may be conflicted or propagated if a `lit` is false.
-        watchers: Vec<Vec<CRef>>,
+        watchers: Vec<Vec<Watcher>>,
         // conflict analyzer
         analyzer: Analayzer,
         // variable data
@@ -719,8 +730,8 @@ pub mod solver {
             let cref = self.db.push(lits, learnt);
             debug_assert!(lits.len() >= 2);
 
-            self.watchers[!lits[0]].push(cref);
-            self.watchers[!lits[1]].push(cref);
+            self.watchers[!lits[0]].push(Watcher::new(cref, lits[1]));
+            self.watchers[!lits[1]].push(Watcher::new(cref, lits[0]));
             cref
         }
         /// Add a new clause to `clauses` and watch a clause.
@@ -795,8 +806,8 @@ pub mod solver {
                 let l2 = clause[1];
                 let cref = self.db.push(&clause, false);
 
-                self.watchers[!l1].push(cref);
-                self.watchers[!l2].push(cref);
+                self.watchers[!l1].push(Watcher::new(cref, l2));
+                self.watchers[!l2].push(Watcher::new(cref, l1));
             }
         }
 
@@ -811,16 +822,19 @@ pub mod solver {
                 debug_assert!(self.vardata.assigns[p.var()] != LitBool::Undef);
 
                 let mut idx = 0;
-                let watchers_ptr = &mut self.watchers as *mut Vec<Vec<CRef>>;
+                let watchers_ptr = &mut self.watchers as *mut Vec<Vec<Watcher>>;
                 let ws = &mut self.watchers[p];
                 'next_clause: while idx < ws.len() {
-                    //debug_assert!(idx < m);
-                    let cr = ws[idx];
+                    let blocker = ws[idx].blocker;
+                    let cr = ws[idx].cref;
+                    if self.vardata.eval(blocker) == LitBool::True {
+                        idx += 1;
+                        continue;
+                    }
 
                     let clause = &mut self.db[cr] as *mut Clause;
                     unsafe {
                         debug_assert!(!(*clause).free);
-
                         debug_assert!((*clause)[0] == !p || (*clause)[1] == !p);
 
                         // make sure that the clause[1] is the false literal.
@@ -828,9 +842,11 @@ pub mod solver {
                             (*clause).swap(0, 1);
                         }
                         let first = (*clause)[0];
+                        let w = Watcher::new(cr, first);
                         // already satisfied
-                        if self.vardata.eval(first) == LitBool::True {
+                        if first != blocker && self.vardata.eval(first) == LitBool::True {
                             debug_assert!(first != (*clause)[1]);
+                            ws[idx] = w;
                             idx += 1;
                             continue 'next_clause;
                         }
@@ -842,7 +858,7 @@ pub mod solver {
                                 (*clause).swap(1, k);
                                 ws.swap_remove(idx);
 
-                                (*watchers_ptr)[!(*clause)[1]].push(cr);
+                                (*watchers_ptr)[!(*clause)[1]].push(w);
                                 // NOTE
                                 // Don't increase `idx` because you replace and the idx element with the last one.
                                 continue 'next_clause;
@@ -884,9 +900,9 @@ pub mod solver {
         fn unwatch_clause(&mut self, cref: CRef) {
             let clause = &self.db[cref];
             let ws = &mut self.watchers[!clause[0]];
-            ws.swap_remove(ws.iter().position(|&cr| cr == cref).expect("Not found"));
+            ws.swap_remove(ws.iter().position(|&w| w.cref == cref).expect("Not found"));
             let ws = &mut self.watchers[!clause[1]];
-            ws.swap_remove(ws.iter().position(|&cr| cr == cref).expect("Not found"));
+            ws.swap_remove(ws.iter().position(|&w| w.cref == cref).expect("Not found"));
         }
         fn reduce_learnts(&mut self) {
             let mut learnts: Vec<_> = self
@@ -1293,7 +1309,7 @@ pub mod solver {
                         self.skip_simplify = true;
                     }
 
-                    if max_learnt_clause as usize <= self.db.learnts.len() {
+                    if max_learnt_clause as usize + self.vardata.trail.stack.len() <= self.db.learnts.len() {
                         self.reduce_learnts();
                         max_learnt_clause *= 1.1;
                     }
