@@ -1,4 +1,5 @@
 pub mod solver {
+
     use std::{
         collections::HashMap,
         ops::{Deref, DerefMut, Index, IndexMut},
@@ -9,6 +10,12 @@ pub mod solver {
     const TOP_LEVEL: usize = 0;
     #[derive(Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
     pub struct Var(pub u32);
+    impl Var {
+        #[allow(dead_code)]
+        fn from_idx(x: usize) -> Var {
+            Var(x as u32)
+        }
+    }
 
     #[derive(Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
     pub struct Lit(u32);
@@ -439,7 +446,7 @@ pub mod solver {
                 self.bump_inc *= 1e-100;
             }
             if self.in_heap(v) {
-                let idx = self.indices[v].unwrap();
+                let idx = self.indices[v].expect("No index");
                 self.up(idx);
             }
         }
@@ -633,6 +640,10 @@ pub mod solver {
             LitBool::from(self.assigns[lit.var()] as i8 ^ lit.neg() as i8)
         }
 
+        fn num_assings(&self) -> usize {
+            self.trail.stack.len()
+        }
+
         /// Enqueue a variable to assign a `value` to a boolean `assign`
         fn enqueue(&mut self, lit: Lit, reason: Option<CRef>) {
             debug_assert!(self.eval(lit) == LitBool::Undef);
@@ -747,6 +758,12 @@ pub mod solver {
             Watcher { cref, blocker }
         }
     }
+    #[derive(Debug, Default, Clone, Copy)]
+    struct SimplifyDB {
+        /// Number of top-level assignments since last execution of 'simplify()'.
+        simp_db_assigns: i32,
+    }
+
     #[derive(Debug, Default)]
     // A SAT Solver
     pub struct Solver {
@@ -760,12 +777,12 @@ pub mod solver {
         analyzer: Analayzer,
         // variable data
         vardata: VarData,
-        skip_simplify: bool,
         order_heap: Heap,
 
         restart_strat: RestartStrategy,
         learnt_size_start: LearntSizeStrategy,
 
+        simplify_db: SimplifyDB,
         // the model of assigns.
         pub models: Vec<LitBool>,
         // the solver status. this value may be set by the functions `add_clause` and `solve`.
@@ -787,10 +804,10 @@ pub mod solver {
                 order_heap: Heap::new(n, 1.0),
                 restart_strat: RestartStrategy::default(),
                 learnt_size_start: LearntSizeStrategy::default(),
+                simplify_db: SimplifyDB::default(),
                 watchers: vec![vec![]; 2 * n],
                 status: None,
                 models: vec![LitBool::Undef; n],
-                skip_simplify: false,
             };
             clauses.iter().for_each(|clause| {
                 if clause.len() == 1 {
@@ -979,7 +996,6 @@ pub mod solver {
                     idx += 1;
                 }
             }
-
             conflict
         }
         fn locked(&self, cref: CRef) -> bool {
@@ -1013,7 +1029,7 @@ pub mod solver {
 
             let extra_lim = self.db.clause_inc / n as f32;
             debug_assert!(!extra_lim.is_nan());
-            
+
             self.db.learnts.clear();
 
             for (i, (act, len, cr)) in learnts.into_iter().enumerate() {
@@ -1079,9 +1095,14 @@ pub mod solver {
 
         fn simplify(&mut self) -> bool {
             debug_assert!(self.vardata.trail.decision_level() == TOP_LEVEL);
+
             if self.propagate().is_some() {
                 return false;
             }
+            if self.vardata.num_assings() as i32 == self.simplify_db.simp_db_assigns {
+                return true;
+            }
+
             {
                 // learnts
                 let n: usize = self.db.learnts.len();
@@ -1118,6 +1139,7 @@ pub mod solver {
                 &mut self.vardata.trail.stack,
             );
 
+            self.simplify_db.simp_db_assigns = self.vardata.num_assings() as i32;
             true
         }
 
@@ -1331,7 +1353,7 @@ pub mod solver {
             let first = self.analyzer.learnt_clause[0];
             if self.analyzer.learnt_clause.len() == 1 {
                 debug_assert_eq!(backtrack_level, TOP_LEVEL);
-                self.skip_simplify = false;
+
                 self.vardata.enqueue(first, None);
             } else {
                 let cr = self.add_clause_db(&self.analyzer.learnt_clause.clone(), true);
@@ -1389,11 +1411,8 @@ pub mod solver {
                         return Status::Indeterminate;
                     }
 
-                    if self.vardata.trail.decision_level() == TOP_LEVEL && !self.skip_simplify {
-                        if !self.simplify() {
-                            return Status::Unsat;
-                        }
-                        self.skip_simplify = true;
+                    if self.vardata.trail.decision_level() == TOP_LEVEL && !self.simplify() {
+                        return Status::Unsat;
                     }
 
                     if self.learnt_size_start.max_learnts + self.vardata.trail.stack.len() as f64
@@ -1408,7 +1427,6 @@ pub mod solver {
                             if self.define(v) {
                                 continue;
                             }
-
                             let lit = Lit::new(v.0, self.vardata.polarity[v]);
                             self.vardata.trail.new_descion_level();
                             self.vardata.enqueue(lit, None);
