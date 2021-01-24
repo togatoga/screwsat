@@ -1,7 +1,7 @@
 pub mod solver {
     use std::{
         cmp::Ordering,
-        collections::{HashMap, VecDeque},
+        collections::HashMap,
         ops::{Deref, DerefMut, Index, IndexMut},
         time::{Duration, Instant},
         vec,
@@ -260,17 +260,17 @@ pub mod solver {
             &mut self,
             watchers: &mut Vec<Vec<CRef>>,
             reason: &mut Vec<Option<CRef>>,
-            que: &mut VecDeque<Lit>,
+            trail: &mut Vec<Lit>,
         ) {
             if self.need_collect_garbage() {
-                self.collect_garbage(watchers, reason, que);
+                self.collect_garbage(watchers, reason, trail);
             }
         }
         fn collect_garbage(
             &mut self,
             watchers: &mut Vec<Vec<CRef>>,
             reason: &mut Vec<Option<CRef>>,
-            que: &mut VecDeque<Lit>,
+            trail: &mut Vec<Lit>,
         ) {
             // assumed that Watcher doesn't have freeded CRef
 
@@ -293,7 +293,7 @@ pub mod solver {
                 }
             }
             // Reasons
-            for lit in que.iter() {
+            for lit in trail.iter() {
                 let v = lit.var();
                 reason[v] = reason[v].map(|cr| *map.get(&cr).unwrap());
             }
@@ -557,6 +557,48 @@ pub mod solver {
         }
     }
 
+    /// The assignment data structure
+    #[derive(Debug, Default)]
+    struct AssignTrail {
+        /// Assignment stack; stores all assigments made in the order they were made.
+        stack: Vec<Lit>,
+        /// Separator indices for different decision levels in `trail`.
+        stack_limit: Vec<usize>,
+        /// Head of the `trail`.
+        peek_head: usize,
+    }
+    impl AssignTrail {
+        fn new() -> AssignTrail {
+            AssignTrail {
+                stack: Vec::new(),
+                stack_limit: Vec::new(),
+                peek_head: 0,
+            }
+        }
+        fn new_descion_level(&mut self) {
+            self.stack_limit.push(self.stack.len());
+        }
+        #[inline]
+        fn decision_level(&self) -> usize {
+            self.stack_limit.len()
+        }
+        #[inline]
+        fn peekable(&self) -> bool {
+            self.peek_head < self.stack.len()
+        }
+        #[inline]
+        fn peek(&self) -> Lit {
+            self.stack[self.peek_head]
+        }
+        #[inline]
+        fn advance(&mut self) {
+            self.peek_head += 1;
+        }
+        fn push(&mut self, x: Lit) {
+            self.stack.push(x);
+        }
+    }
+
     #[derive(Debug, Default)]
     struct VarData {
         /// assignments for each variable
@@ -566,10 +608,7 @@ pub mod solver {
         level: Vec<usize>,
         // a clause that CRef points make a variable forced to be assigned
         reason: Vec<Option<CRef>>,
-        // assigned variables
-        que: VecDeque<Lit>,
-        // the head index of `que` points unprocessed elements
-        head: usize,
+        trail: AssignTrail,
     }
 
     impl VarData {
@@ -579,8 +618,7 @@ pub mod solver {
                 polarity: vec![false; n],
                 level: vec![TOP_LEVEL; n],
                 reason: vec![None; n],
-                head: 0,
-                que: VecDeque::new(),
+                trail: AssignTrail::new(),
             }
         }
         fn assign(&mut self, var: Var, lb: LitBool, level: usize, reason: Option<CRef>) {
@@ -595,12 +633,6 @@ pub mod solver {
         fn eval(&self, lit: Lit) -> LitBool {
             LitBool::from(self.assigns[lit.var()] as i8 ^ lit.neg() as i8)
         }
-        fn current_level(&self) -> usize {
-            self.que
-                .back()
-                .map(|x| self.level(x.var()))
-                .unwrap_or(TOP_LEVEL)
-        }
 
         /// Enqueue a variable to assign a `value` to a boolean `assign`
         fn enqueue(&mut self, lit: Lit, reason: Option<CRef>) {
@@ -609,10 +641,10 @@ pub mod solver {
             self.assign(
                 lit.var(),
                 LitBool::from(lit.neg() as i8),
-                self.current_level(),
+                self.trail.decision_level(),
                 reason,
             );
-            self.que.push_back(lit);
+            self.trail.push(lit);
         }
     }
     #[derive(Debug, Default)]
@@ -696,7 +728,7 @@ pub mod solver {
         /// # Arguments
         /// * `clause` - a clause has one or some literal variables
         pub fn add_clause(&mut self, clause: &[Lit]) {
-            debug_assert!(self.vardata.current_level() == TOP_LEVEL);
+            debug_assert!(self.vardata.trail.decision_level() == TOP_LEVEL);
             // grow the space of array variables.
             clause.iter().for_each(|c| {
                 while c.var().0 as usize >= self.vardata.assigns.len() {
@@ -773,9 +805,9 @@ pub mod solver {
         /// `None` is no conflicts.
         fn propagate(&mut self) -> Option<CRef> {
             let mut conflict = None;
-            'conflict: while self.vardata.head < self.vardata.que.len() {
-                let p = self.vardata.que[self.vardata.head];
-                self.vardata.head += 1;
+            'conflict: while self.vardata.trail.peekable() {
+                let p = self.vardata.trail.peek();
+                self.vardata.trail.advance();
                 debug_assert!(self.vardata.assigns[p.var()] != LitBool::Undef);
 
                 let mut idx = 0;
@@ -896,32 +928,31 @@ pub mod solver {
             self.db.collect_garbage_if_needed(
                 &mut self.watchers,
                 &mut self.vardata.reason,
-                &mut self.vardata.que,
+                &mut self.vardata.trail.stack,
             );
         }
 
-        fn pop_queue_until(&mut self, backtrack_level: usize) {
-            while let Some(p) = self.vardata.que.back() {
-                if self.vardata.level(p.var()) > backtrack_level {
-                    if !self.order_heap.in_heap(p.var()) {
-                        self.order_heap.push(p.var());
-                    }
-                    self.vardata.polarity[p.var()] =
-                        matches!(self.vardata.assigns[p.var()], LitBool::True);
+        fn pop_trail_until(&mut self, backtrack_level: usize) {
+            if self.vardata.trail.decision_level() <= backtrack_level {
+                return;
+            }
 
-                    self.vardata.assigns[p.var()] = LitBool::Undef;
-                    self.vardata.reason[p.var()] = None;
-                    self.vardata.level[p.var()] = TOP_LEVEL;
-                    self.vardata.que.pop_back();
-                } else {
-                    break;
+            let trail = &mut self.vardata.trail;
+            let sep = trail.stack_limit[backtrack_level];
+            for p in trail.stack.iter().skip(sep).rev() {
+                let x = p.var();
+                if !self.order_heap.in_heap(x) {
+                    self.order_heap.push(x);
                 }
+                self.vardata.polarity[x] = matches!(self.vardata.assigns[x], LitBool::True);
+
+                self.vardata.assigns[x] = LitBool::Undef;
+                self.vardata.reason[x] = None;
+                self.vardata.level[x] = TOP_LEVEL;
             }
-            if self.vardata.que.is_empty() {
-                self.vardata.head = 0;
-            } else {
-                self.vardata.head = self.vardata.que.len() - 1;
-            }
+            trail.peek_head = sep;
+            trail.stack.truncate(sep);
+            trail.stack_limit.truncate(backtrack_level);
         }
 
         fn detach_if_satisfied(&mut self, cr: CRef) -> bool {
@@ -948,7 +979,7 @@ pub mod solver {
         }
 
         fn simplify(&mut self) {
-            debug_assert!(self.vardata.current_level() == TOP_LEVEL);
+            debug_assert!(self.vardata.trail.decision_level() == TOP_LEVEL);
             {
                 // learnts
                 let n: usize = self.db.learnts.len();
@@ -982,7 +1013,7 @@ pub mod solver {
             self.db.collect_garbage_if_needed(
                 &mut self.watchers,
                 &mut self.vardata.reason,
-                &mut self.vardata.que,
+                &mut self.vardata.trail.stack,
             );
         }
 
@@ -1073,7 +1104,7 @@ pub mod solver {
             // seen must be clear
             debug_assert!(self.analyzer.seen.iter().all(|&x| !x));
 
-            let current_level = self.vardata.current_level();
+            let decision_level = self.vardata.trail.decision_level();
             self.analyzer.learnt_clause.clear();
 
             let mut same_level_cnt = 0;
@@ -1094,8 +1125,8 @@ pub mod solver {
                 // already checked
                 self.analyzer.seen[var] = true;
 
-                //debug_assert!(self.vardata.level[var] <= current_level);
-                if self.vardata.level(var) < current_level {
+                //debug_assert!(self.vardata.level[var] <= decision_level);
+                if self.vardata.level(var) < decision_level {
                     self.analyzer.learnt_clause.push(*p);
                 } else {
                     same_level_cnt += 1;
@@ -1105,7 +1136,7 @@ pub mod solver {
             // Traverse an implication graph to 1-UIP(unique implication point)
             let first_uip = {
                 let mut p = None;
-                for &lit in self.vardata.que.iter().rev() {
+                for &lit in self.vardata.trail.stack.iter().rev() {
                     let v = lit.var();
 
                     // Skip a variable that isn't checked.
@@ -1115,7 +1146,7 @@ pub mod solver {
                     self.analyzer.seen[v] = false;
                     self.order_heap.bump_activity(v);
 
-                    debug_assert_eq!(self.vardata.level[v], current_level);
+                    debug_assert_eq!(self.vardata.level[v], decision_level);
                     same_level_cnt -= 1;
                     // There is no variables that are at the conflict level
                     if same_level_cnt <= 0 {
@@ -1137,8 +1168,8 @@ pub mod solver {
                             continue;
                         }
                         self.analyzer.seen[var] = true;
-                        debug_assert!(self.vardata.level(var) <= current_level);
-                        if self.vardata.level(var) < current_level {
+                        debug_assert!(self.vardata.level(var) <= decision_level);
+                        if self.vardata.level(var) < decision_level {
                             self.analyzer.learnt_clause.push(*p);
                         } else {
                             same_level_cnt += 1;
@@ -1180,7 +1211,7 @@ pub mod solver {
             };
 
             // Cancel decisions until the level is less than equal to the backtrack level
-            self.pop_queue_until(backtrack_level);
+            self.pop_trail_until(backtrack_level);
 
             // propagate it by a new learnt clause
             let first = self.analyzer.learnt_clause[0];
@@ -1213,7 +1244,7 @@ pub mod solver {
         /// # Arguments
         /// * `var_num` - The number of variable
         pub fn reserve_variable(&mut self, var_num: usize) {
-            self.vardata.que.reserve(var_num);
+            self.vardata.trail.stack.reserve(var_num);
             self.db.clauses.reserve(var_num);
             self.vardata.reason.reserve(var_num);
             self.vardata.level.reserve(var_num);
@@ -1243,7 +1274,7 @@ pub mod solver {
                 }
                 if let Some(confl) = self.propagate() {
                     //Conflict
-                    if self.vardata.current_level() == TOP_LEVEL {
+                    if self.vardata.trail.decision_level() == TOP_LEVEL {
                         self.status = Some(Status::Unsat);
                         return Status::Unsat;
                     }
@@ -1255,10 +1286,10 @@ pub mod solver {
                     // No Conflict
                     if conflict_cnt as f64 >= restart_limit {
                         restart_limit *= 1.1;
-                        self.pop_queue_until(TOP_LEVEL);
+                        self.pop_trail_until(TOP_LEVEL);
                     }
 
-                    if self.vardata.current_level() == TOP_LEVEL && !self.skip_simplify {
+                    if self.vardata.trail.decision_level() == TOP_LEVEL && !self.skip_simplify {
                         self.simplify();
                         self.skip_simplify = true;
                     }
@@ -1276,8 +1307,8 @@ pub mod solver {
                             }
 
                             let lit = Lit::new(v.0, self.vardata.polarity[v]);
+                            self.vardata.trail.new_descion_level();
                             self.vardata.enqueue(lit, None);
-                            self.vardata.level[lit.var()] += 1;
                             break;
                         } else {
                             // all variables are selected. which means that a formula is satisfied
