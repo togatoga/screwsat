@@ -17,29 +17,34 @@ pub mod solver {
         pub fn new(var: u32, positive: bool) -> Lit {
             Lit(if positive { var << 1 } else { (var << 1) + 1 })
         }
+        #[inline]
         pub fn var(self) -> Var {
             Var(self.0 >> 1)
         }
+        #[inline]
         pub fn pos(&self) -> bool {
             self.0 & 1 == 0
         }
+        #[inline]
         pub fn neg(&self) -> bool {
-            !self.pos()
+            self.0 & 1 != 0
         }
     }
     impl From<i32> for Lit {
+        #[inline]
         fn from(x: i32) -> Self {
             debug_assert!(x != 0);
             let d = x.abs() as u32 - 1;
             if x > 0 {
-                Lit(2 * d)
+                Lit(d << 1)
             } else {
-                Lit(2 * d + 1)
+                Lit((d << 1) + 1)
             }
         }
     }
     impl std::ops::Not for Lit {
         type Output = Self;
+        #[inline]
         fn not(self) -> Self::Output {
             Lit(self.0 ^ 1)
         }
@@ -90,12 +95,14 @@ pub mod solver {
 
     impl Deref for Clause {
         type Target = [Lit];
+        #[inline]
         fn deref(&self) -> &Self::Target {
             &self.data
         }
     }
 
     impl DerefMut for Clause {
+        #[inline]
         fn deref_mut(&mut self) -> &mut Self::Target {
             &mut self.data
         }
@@ -147,12 +154,14 @@ pub mod solver {
 
     impl Deref for ClauseDB {
         type Target = [Clause];
+        #[inline]
         fn deref(&self) -> &Self::Target {
             &self.db
         }
     }
 
     impl DerefMut for ClauseDB {
+        #[inline]
         fn deref_mut(&mut self) -> &mut Self::Target {
             &mut self.db
         }
@@ -324,6 +333,7 @@ pub mod solver {
         Undef = 2,
     }
     impl From<i8> for LitBool {
+        #[inline]
         fn from(x: i8) -> Self {
             match x {
                 0 => LitBool::True,
@@ -581,6 +591,7 @@ pub mod solver {
         fn level(&self, v: Var) -> usize {
             self.level[v]
         }
+        #[inline]
         fn eval(&self, lit: Lit) -> LitBool {
             LitBool::from(self.assigns[lit.var()] as i8 ^ lit.neg() as i8)
         }
@@ -895,7 +906,8 @@ pub mod solver {
                     if !self.order_heap.in_heap(p.var()) {
                         self.order_heap.push(p.var());
                     }
-                    self.vardata.polarity[p.var()] = matches!(self.vardata.assigns[p.var()], LitBool::True);
+                    self.vardata.polarity[p.var()] =
+                        matches!(self.vardata.assigns[p.var()], LitBool::True);
 
                     self.vardata.assigns[p.var()] = LitBool::Undef;
                     self.vardata.reason[p.var()] = None;
