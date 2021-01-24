@@ -1,7 +1,7 @@
 pub mod solver {
     use std::{
         cmp::Ordering,
-        collections::{HashMap, VecDeque},
+        collections::HashMap,
         ops::{Deref, DerefMut, Index, IndexMut},
         time::{Duration, Instant},
         vec,
@@ -260,7 +260,7 @@ pub mod solver {
             &mut self,
             watchers: &mut Vec<Vec<CRef>>,
             reason: &mut Vec<Option<CRef>>,
-            que: &mut VecDeque<Lit>,
+            que: &mut Vec<Lit>,
         ) {
             if self.need_collect_garbage() {
                 self.collect_garbage(watchers, reason, que);
@@ -270,7 +270,7 @@ pub mod solver {
             &mut self,
             watchers: &mut Vec<Vec<CRef>>,
             reason: &mut Vec<Option<CRef>>,
-            que: &mut VecDeque<Lit>,
+            que: &mut Vec<Lit>,
         ) {
             // assumed that Watcher doesn't have freeded CRef
 
@@ -567,7 +567,7 @@ pub mod solver {
         // a clause that CRef points make a variable forced to be assigned
         reason: Vec<Option<CRef>>,
         // assigned variables
-        que: VecDeque<Lit>,
+        que: Vec<Lit>,
         // the head index of `que` points unprocessed elements
         head: usize,
     }
@@ -580,7 +580,7 @@ pub mod solver {
                 level: vec![TOP_LEVEL; n],
                 reason: vec![None; n],
                 head: 0,
-                que: VecDeque::new(),
+                que: Vec::new(),
             }
         }
         fn assign(&mut self, var: Var, lb: LitBool, level: usize, reason: Option<CRef>) {
@@ -597,7 +597,7 @@ pub mod solver {
         }
         fn current_level(&self) -> usize {
             self.que
-                .back()
+                .last()
                 .map(|x| self.level(x.var()))
                 .unwrap_or(TOP_LEVEL)
         }
@@ -612,7 +612,7 @@ pub mod solver {
                 self.current_level(),
                 reason,
             );
-            self.que.push_back(lit);
+            self.que.push(lit);
         }
     }
     #[derive(Debug, Default)]
@@ -901,7 +901,7 @@ pub mod solver {
         }
 
         fn pop_queue_until(&mut self, backtrack_level: usize) {
-            while let Some(p) = self.vardata.que.back() {
+            while let Some(p) = self.vardata.que.last() {
                 if self.vardata.level(p.var()) > backtrack_level {
                     if !self.order_heap.in_heap(p.var()) {
                         self.order_heap.push(p.var());
@@ -912,7 +912,7 @@ pub mod solver {
                     self.vardata.assigns[p.var()] = LitBool::Undef;
                     self.vardata.reason[p.var()] = None;
                     self.vardata.level[p.var()] = TOP_LEVEL;
-                    self.vardata.que.pop_back();
+                    self.vardata.que.pop();
                 } else {
                     break;
                 }
