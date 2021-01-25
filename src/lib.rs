@@ -1,8 +1,9 @@
 pub mod solver {
 
     use std::{
-        collections::HashMap,
-        ops::{Deref, DerefMut, Index, IndexMut},
+        fmt,
+        marker::PhantomData,
+        ops::{Index, IndexMut},
         time::{Duration, Instant},
         vec,
     };
@@ -58,96 +59,430 @@ pub mod solver {
 
     // Clause //
 
-    #[derive(Debug, Default, PartialEq, PartialOrd)]
-    pub struct Clause {
-        data: Vec<Lit>,
-        activity: f32,
-        learnt: bool,
-        free: bool, // will be deleted
+    struct ClauseRef<'a> {
+        header: ClauseHeader,
+        clause: &'a [ClauseData],
+        extra: Option<ClauseData>,
     }
-    impl Clause {
-        fn new(clause: &[Lit]) -> Clause {
-            Clause {
-                data: clause.to_vec(),
-                activity: 0.0,
-                learnt: false,
-                free: false,
-            }
-        }
-        fn with_learnt(mut self, learnt: bool) -> Clause {
-            self.learnt = learnt;
-            self
-        }
-        fn swap(&mut self, x: usize, y: usize) {
-            self.data.swap(x, y);
+
+    impl<'a> ClauseRef<'a> {
+        fn activity(&self) -> f32 {
+            unsafe { self.extra.as_ref().expect("No activity").act }
         }
         fn len(&self) -> usize {
-            self.data.len()
-        }
-        fn activity(&self) -> f32 {
-            self.activity
-        }
-        fn learnt(&self) -> bool {
-            self.learnt
-        }
-        fn byte(&self) -> usize {
-            std::mem::size_of::<Lit>() * self.data.capacity() + std::mem::size_of::<Clause>()
+            self.clause.len()
         }
         #[allow(dead_code)]
-        fn truncate(&mut self, len: usize) {
-            self.data.truncate(len);
+        fn iter(&self) -> ClauseIter {
+            ClauseIter(self.clause.iter())
+        }
+        pub fn reloced(&self) -> bool {
+            self.header.reloced()
+        }
+        #[allow(dead_code)]
+        pub fn relocation(&self) -> CRef {
+            debug_assert!(self.reloced());
+            unsafe { self.clause[0].cref }
         }
     }
 
-    impl Deref for Clause {
-        type Target = [Lit];
-        #[inline]
-        fn deref(&self) -> &Self::Target {
-            &self.data
-        }
-    }
-
-    impl DerefMut for Clause {
-        #[inline]
-        fn deref_mut(&mut self) -> &mut Self::Target {
-            &mut self.data
-        }
-    }
-
-    impl Index<usize> for Clause {
+    impl<'a> Index<usize> for ClauseRef<'a> {
         type Output = Lit;
-        #[inline]
-        fn index(&self, idx: usize) -> &Self::Output {
-            &self.data[idx]
-        }
-    }
-    impl IndexMut<usize> for Clause {
-        #[inline]
-        fn index_mut(&mut self, idx: usize) -> &mut Self::Output {
-            &mut self.data[idx]
+        fn index(&self, idx: usize) -> &'a Self::Output {
+            unsafe { &self.clause[idx].lit }
         }
     }
 
-    impl From<Vec<Lit>> for Clause {
-        fn from(lits: Vec<Lit>) -> Self {
-            Clause::new(&lits)
+    struct ClauseMut<'a> {
+        header: &'a mut ClauseHeader,
+        clause: &'a mut [ClauseData],
+        extra: Option<&'a mut ClauseData>,
+    }
+
+    impl<'a> ClauseMut<'a> {
+        fn set_activity(&mut self, act: f32) {
+            self.extra.as_mut().expect("No extra field").act = act;
+        }
+        fn activity(&self) -> f32 {
+            unsafe { self.extra.as_ref().expect("No activity").act }
+        }
+        fn len(&self) -> usize {
+            self.clause.len()
+        }
+        fn swap(&mut self, x: usize, y: usize) {
+            self.clause.swap(x, y);
+        }
+        #[allow(dead_code)]
+        fn iter(&self) -> ClauseIter {
+            ClauseIter(self.clause.iter())
+        }
+        #[allow(dead_code)]
+        fn iter_mut(&mut self) -> ClauseIterMut {
+            ClauseIterMut(self.clause.iter_mut())
+        }
+        pub fn reloced(&self) -> bool {
+            self.header.reloced()
+        }
+        pub fn relocation(&self) -> CRef {
+            debug_assert!(self.reloced());
+            unsafe { self.clause[0].cref }
+        }
+        pub fn set_reloced(&mut self, reloced: bool) {
+            self.header.set_reloced(reloced);
+        }
+        pub fn relocate(mut self, c: CRef) {
+            debug_assert!(!self.reloced());
+            self.set_reloced(true);
+            self.clause[0].cref = c;
+        }
+
+        pub fn as_clause_ref(&mut self) -> ClauseRef {
+            ClauseRef {
+                header: *self.header,
+                clause: self.clause,
+                extra: self.extra.as_mut().map(|extra| **extra),
+            }
+        }
+    }
+
+    impl<'a> Index<usize> for ClauseMut<'a> {
+        type Output = Lit;
+        fn index(&self, idx: usize) -> &Self::Output {
+            unsafe { &self.clause[idx].lit }
+        }
+    }
+
+    impl<'a> IndexMut<usize> for ClauseMut<'a> {
+        fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+            unsafe { &mut self.clause[index as usize].lit }
+        }
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct ClauseIter<'a>(std::slice::Iter<'a, ClauseData>);
+
+    impl<'a> Iterator for ClauseIter<'a> {
+        type Item = &'a Lit;
+        fn next(&mut self) -> Option<Self::Item> {
+            self.0.next().map(|lit| unsafe { &lit.lit })
+        }
+        fn size_hint(&self) -> (usize, Option<usize>) {
+            self.0.size_hint()
+        }
+    }
+    impl<'a> DoubleEndedIterator for ClauseIter<'a> {
+        fn next_back(&mut self) -> Option<Self::Item> {
+            self.0.next_back().map(|lit| unsafe { &lit.lit })
+        }
+    }
+
+    #[derive(Debug)]
+    pub struct ClauseIterMut<'a>(std::slice::IterMut<'a, ClauseData>);
+
+    impl<'a> Iterator for ClauseIterMut<'a> {
+        type Item = &'a mut Lit;
+        fn next(&mut self) -> Option<Self::Item> {
+            self.0.next().map(|lit| unsafe { &mut lit.lit })
+        }
+        fn size_hint(&self) -> (usize, Option<usize>) {
+            self.0.size_hint()
+        }
+    }
+    impl<'a> DoubleEndedIterator for ClauseIterMut<'a> {
+        fn next_back(&mut self) -> Option<Self::Item> {
+            self.0.next_back().map(|lit| unsafe { &mut lit.lit })
         }
     }
 
     // Clause //
 
-    #[derive(Debug, Default, PartialEq, Eq, PartialOrd, Ord, Copy, Clone, Hash)]
-    struct CRef(usize);
+    #[derive(Debug)]
+    struct RegionAllocator<T: Copy + Default> {
+        data: Vec<T>,
+        wasted: usize,
+    }
+
+    #[derive(Debug, Default, Clone, Copy)]
+    struct Ref<T: Copy>(usize, PhantomData<T>);
+    impl<T: Copy> PartialEq for Ref<T> {
+        fn eq(&self, other: &Self) -> bool {
+            self.0 == other.0
+        }
+    }
+
+    impl<T: Copy> std::ops::Add<usize> for Ref<T> {
+        type Output = Ref<T>;
+        fn add(self, rhs: usize) -> Self::Output {
+            Ref(self.0 + rhs, PhantomData)
+        }
+    }
+
+    impl<T: Copy + Default> RegionAllocator<T> {
+        fn new() -> RegionAllocator<T> {
+            RegionAllocator {
+                data: Vec::with_capacity(1024 * 1024),
+                wasted: 0,
+            }
+        }
+        fn with_capacity(n: usize) -> RegionAllocator<T> {
+            RegionAllocator {
+                data: Vec::with_capacity(n),
+                wasted: 0,
+            }
+        }
+        fn len(&self) -> usize {
+            self.data.len()
+        }
+        fn capacity(&self) -> usize {
+            self.data.capacity()
+        }
+        fn free(&mut self, size: usize) {
+            debug_assert!(size <= self.capacity());
+            self.wasted += size;
+        }
+
+        fn wasted(&self) -> usize {
+            self.wasted
+        }
+
+        fn alloc(&mut self, size: usize) -> Ref<T> {
+            let r = self.len();
+            self.data.extend((0..size).map(|_| T::default()));
+
+            Ref(r, PhantomData)
+        }
+
+        pub fn subslice(&self, r: Ref<T>, len: usize) -> &[T] {
+            debug_assert!(len <= self.len());
+            &self.data[r.0..r.0 + len]
+        }
+        pub fn subslice_mut(&mut self, r: Ref<T>, len: usize) -> &mut [T] {
+            debug_assert!(len <= self.len());
+            &mut self.data[r.0..r.0 + len]
+        }
+    }
+
+    impl<T: Copy + Default> Index<Ref<T>> for RegionAllocator<T> {
+        type Output = T;
+        fn index(&self, r: Ref<T>) -> &Self::Output {
+            &self.data[r.0]
+        }
+    }
+    impl<T: Copy + Default> IndexMut<Ref<T>> for RegionAllocator<T> {
+        fn index_mut(&mut self, r: Ref<T>) -> &mut Self::Output {
+            &mut self.data[r.0]
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    union ClauseData {
+        lit: Lit,
+        abs: u32,
+        act: f32,
+        header: ClauseHeader,
+        cref: CRef,
+    }
+
+    impl Default for ClauseData {
+        fn default() -> Self {
+            ClauseData { abs: 0 }
+        }
+    }
+
+    impl fmt::Debug for ClauseData {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.debug_struct("ClauseData")
+                .field("abs", unsafe { &self.abs })
+                .finish()
+        }
+    }
+    // unsigned mark      : 2;
+    // unsigned learnt    : 1;
+    // unsigned has_extra : 1;
+    // unsigned reloced   : 1;
+    // unsigned size      : 27;
+    #[derive(Clone, Copy)]
+    pub struct ClauseHeader(u32);
+
+    impl ClauseHeader {
+        pub fn new(mark: u32, learnt: bool, has_extra: bool, reloced: bool, size: u32) -> Self {
+            debug_assert!(mark < 4);
+            debug_assert!(size < (1 << 27));
+            ClauseHeader(
+                (mark << 30)
+                    | ((learnt as u32) << 29)
+                    | ((has_extra as u32) << 28)
+                    | ((reloced as u32) << 27)
+                    | size,
+            )
+        }
+        pub fn mark(&self) -> u32 {
+            self.0 >> 30
+        }
+        pub fn free(&self) -> bool {
+            self.mark() == 1
+        }
+        pub fn learnt(&self) -> bool {
+            (self.0 & (1 << 29)) != 0
+        }
+        pub fn has_extra(&self) -> bool {
+            (self.0 & (1 << 28)) != 0
+        }
+        pub fn reloced(&self) -> bool {
+            (self.0 & (1 << 27)) != 0
+        }
+        pub fn size(&self) -> u32 {
+            self.0 & ((1 << 27) - 1)
+        }
+        pub fn set_mark(&mut self, mark: u32) {
+            debug_assert!(mark < 4);
+            self.0 = (self.0 & !(3 << 30)) | (mark << 30);
+        }
+        pub fn set_learnt(&mut self, learnt: bool) {
+            self.0 = (self.0 & !(1 << 29)) | ((learnt as u32) << 29);
+        }
+        pub fn set_has_extra(&mut self, has_extra: bool) {
+            self.0 = (self.0 & !(1 << 28)) | ((has_extra as u32) << 28);
+        }
+        pub fn set_reloced(&mut self, reloced: bool) {
+            self.0 = (self.0 & !(1 << 27)) | ((reloced as u32) << 27);
+        }
+        pub fn set_size(&mut self, size: u32) {
+            debug_assert!(size < (1 << 27));
+            self.0 = (self.0 & !((1 << 27) - 1)) | size;
+        }
+    }
+
+    type CRef = Ref<ClauseData>;
+
+    #[derive(Debug)]
+    struct ClauseAllocator {
+        ra: RegionAllocator<ClauseData>,
+    }
+
+    impl ClauseAllocator {
+        fn new() -> ClauseAllocator {
+            ClauseAllocator {
+                ra: RegionAllocator::new(),
+            }
+        }
+        fn with_capacity(n: usize) -> ClauseAllocator {
+            ClauseAllocator {
+                ra: RegionAllocator::with_capacity(n),
+            }
+        }
+
+        fn unit_region(len: usize, extra: bool) -> usize {
+            //header + clause + other
+            1 + len + extra as usize
+        }
+        fn alloc(&mut self, clause: &[Lit], learnt: bool) -> CRef {
+            let use_extra = learnt;
+            let cid = self
+                .ra
+                .alloc(ClauseAllocator::unit_region(clause.len(), learnt));
+            self.ra[cid].header =
+                ClauseHeader::new(0, learnt, use_extra, false, clause.len() as u32);
+            let clause_ptr = cid + 1;
+            for (i, &lit) in clause.iter().enumerate() {
+                self.ra[clause_ptr + i as usize].lit = lit;
+            }
+
+            if learnt {
+                self.ra[clause_ptr + clause.len() as usize].act = 0.0;
+            }
+
+            cid
+        }
+
+        pub fn alloc_copy(&mut self, from: ClauseRef) -> CRef {
+            let use_extra = from.header.learnt();
+            let cid = self
+                .ra
+                .alloc(1 + from.header.size() as usize + use_extra as usize);
+            self.ra[cid].header = from.header;
+            // NOTE: the copied clause may lose the extra field.
+            unsafe { &mut self.ra[cid].header }.set_has_extra(use_extra);
+            for (i, &lit) in from.iter().enumerate() {
+                self.ra[cid + 1 + i as usize].lit = lit;
+            }
+            if use_extra {
+                self.ra[cid + 1 + from.len() as usize] = from.extra.expect("Extra");
+            }
+            cid
+        }
+
+        pub fn free(&mut self, cr: CRef) {
+            let size = {
+                let c = self.get(cr);
+                1 + c.len() + c.header.has_extra() as usize
+            };
+            self.ra.free(size);
+        }
+
+        pub fn reloc(&mut self, cr: &mut CRef, to: &mut ClauseAllocator) {
+            let mut c = self.get_mut(*cr);
+
+            if c.header.reloced() {
+                *cr = c.relocation();
+                return;
+            }
+
+            *cr = to.alloc_copy(c.as_clause_ref());
+            c.relocate(*cr);
+        }
+
+        fn get(&self, cref: CRef) -> ClauseRef {
+            let header = unsafe { self.ra[cref].header };
+            let has_extra = header.has_extra();
+            let size = header.size();
+
+            let clause = self.ra.subslice(cref + 1, size as usize);
+            let extra = if has_extra {
+                Some(self.ra[cref + 1 + size as usize])
+            } else {
+                None
+            };
+            ClauseRef {
+                header,
+                clause,
+                extra,
+            }
+        }
+        fn get_mut(&mut self, cref: CRef) -> ClauseMut {
+            let header = unsafe { self.ra[cref].header };
+            let has_extra = header.has_extra();
+            let size = header.size();
+            let len = 1 + size + has_extra as u32;
+
+            let subslice = self.ra.subslice_mut(cref, len as usize);
+            let (subslice0, subslice) = subslice.split_at_mut(1);
+            let (subslice1, subslice2) = subslice.split_at_mut(size as usize);
+            ClauseMut {
+                header: unsafe { &mut subslice0[0].header },
+                clause: subslice1,
+                extra: subslice2.first_mut(),
+            }
+        }
+
+        fn len(&self) -> usize {
+            self.ra.len()
+        }
+        fn wasted(&self) -> usize {
+            self.ra.wasted()
+        }
+    }
+
+    // Clause //
+
     #[derive(Debug)]
     struct ClauseDB {
         // original
         clauses: Vec<CRef>,
         // learnts
         learnts: Vec<CRef>,
-        db: Vec<Clause>,
+        db: ClauseAllocator,
         clause_inc: f32,
-        total: usize,
-        wasted: usize,
     }
 
     impl Default for ClauseDB {
@@ -158,83 +493,35 @@ pub mod solver {
         }
     }
 
-    impl Deref for ClauseDB {
-        type Target = [Clause];
-        #[inline]
-        fn deref(&self) -> &Self::Target {
-            &self.db
-        }
-    }
-
-    impl DerefMut for ClauseDB {
-        #[inline]
-        fn deref_mut(&mut self) -> &mut Self::Target {
-            &mut self.db
-        }
-    }
-
-    impl Index<CRef> for ClauseDB {
-        type Output = Clause;
-        #[inline]
-        fn index(&self, cref: CRef) -> &Self::Output {
-            &self.db[cref.0]
-        }
-    }
-    impl IndexMut<CRef> for ClauseDB {
-        #[inline]
-        fn index_mut(&mut self, cref: CRef) -> &mut Self::Output {
-            &mut self.db[cref.0]
-        }
-    }
-
     impl ClauseDB {
         pub fn new() -> ClauseDB {
             ClauseDB {
                 clauses: Vec::new(),
                 learnts: Vec::new(),
                 clause_inc: 0.0,
-                db: Vec::new(),
-                total: 0,
-                wasted: 0,
+                db: ClauseAllocator::new(),
             }
-        }
-        fn alloc(&self) -> CRef {
-            CRef(self.db.len())
-        }
-        fn free(&mut self, cr: CRef) {
-            debug_assert!(!self[cr].free);
-            self.wasted += self[cr].byte();
-            self[cr].free = true;
-        }
-        #[allow(dead_code)]
-        fn wasted(&self) -> usize {
-            self.wasted
-        }
-        #[allow(dead_code)]
-        fn total(&self) -> usize {
-            self.total
-        }
-        #[allow(dead_code)]
-        fn get(&self, cr: CRef) -> &Clause {
-            &self[cr]
-        }
-        #[allow(dead_code)]
-        fn get_mut(&mut self, cr: CRef) -> &mut Clause {
-            &mut self[cr]
         }
 
         fn bump_activity(&mut self, cr: CRef) {
-            debug_assert!(self[cr].learnt());
-            debug_assert!(self.clause_inc >= 0.0);
-            self[cr].activity += self.clause_inc;
-            if self[cr].activity() > 1e20 {
+            let act = {
+                let mut clause = self.db.get_mut(cr);
+                //debug_assert!(self[cr].learnt());
+                //debug_assert!(self.clause_inc >= 0.0);
+                let new_act = clause.activity() + self.clause_inc as f32;
+                clause.set_activity(new_act);
+                new_act
+            };
+
+            if act > 1e20 {
                 // Rescale
                 let n: usize = self.learnts.len();
                 for i in 0..n {
                     let x = self.learnts[i];
-                    let mut clause = &mut self[x];
-                    debug_assert!(clause.learnt());
-                    clause.activity *= 1e-20;
+                    let mut clause = self.db.get_mut(x);
+                    debug_assert!(clause.header.learnt());
+                    let new_act = clause.activity() * 1e-20;
+                    clause.set_activity(new_act);
                 }
 
                 self.clause_inc *= 1e-20;
@@ -246,79 +533,85 @@ pub mod solver {
         }
 
         pub fn push(&mut self, lits: &[Lit], learnt: bool) -> CRef {
-            let cref = self.alloc();
+            let cref = self.db.alloc(lits, learnt);
             if learnt {
                 self.learnts.push(cref);
             } else {
                 self.clauses.push(cref);
             }
-            let clause = Clause::new(lits).with_learnt(learnt);
-            self.total += clause.byte();
-            self.db.push(clause);
             cref
         }
 
         fn need_collect_garbage(&mut self) -> bool {
-            self.wasted() * 10 > self.total() * 2
+            self.db.wasted() * 10 > self.db.len() * 3
         }
 
         fn collect_garbage_if_needed(
             &mut self,
             watchers: &mut Vec<Vec<Watcher>>,
-            reason: &mut Vec<Option<CRef>>,
-            trail: &mut Vec<Lit>,
+            vardata: &mut VarData,
         ) {
             if self.need_collect_garbage() {
-                self.collect_garbage(watchers, reason, trail);
+                self.collect_garbage(watchers, vardata);
             }
         }
-        fn collect_garbage(
-            &mut self,
-            watchers: &mut Vec<Vec<Watcher>>,
-            reason: &mut Vec<Option<CRef>>,
-            trail: &mut Vec<Lit>,
-        ) {
-            // assumed that Watcher doesn't have freeded CRef
+        fn collect_garbage(&mut self, watchers: &mut Vec<Vec<Watcher>>, vardata: &mut VarData) {
+            let mut to = ClauseAllocator::with_capacity(self.db.len() - self.db.wasted());
 
-            let mut map = HashMap::new();
-            //cref
-
-            self.wasted = 0;
-            self.total = 0;
-            for (cr, clause) in self.db.iter().enumerate() {
-                if !clause.free {
-                    map.insert(CRef(cr), CRef(map.len()));
-                    self.total += clause.byte();
-                }
-            }
-            // Watchers
             for watcher in watchers.iter_mut() {
-                for w in watcher.iter_mut() {
-                    debug_assert!(!self[w.cref].free);
-                    w.cref = *map.get(&w.cref).unwrap();
+                for ws in watcher.iter_mut() {
+                    self.db.reloc(&mut ws.cref, &mut to);
                 }
             }
-            // Reasons
-            for lit in trail.iter() {
-                let v = lit.var();
-                reason[v] = reason[v].map(|cr| *map.get(&cr).unwrap());
+
+            // All reasons:
+            {
+                let trail = &vardata.trail.stack;
+                for &lit in trail.iter() {
+                    let cond = if let Some(cref) = vardata.reason[lit.var()] {
+                        let c = self.db.get(cref);
+                        c.reloced() || vardata.locked(c[0], cref)
+                    } else {
+                        false
+                    };
+                    if cond {
+                        let mut cref = vardata.reason[lit.var()].as_mut().expect("not found");
+                        self.db.reloc(&mut cref, &mut to);
+                    }
+                }
             }
 
-            // Original
-            for cr in self.clauses.iter_mut() {
-                debug_assert!(!self.db[cr.0].free);
-                *cr = *map.get(cr).unwrap();
+            // All learnts
+            {
+                let mut j = 0;
+                for i in 0..self.learnts.len() {
+                    let mut cr = self.learnts[i];
+                    let removed = self.db.get(cr).header.free();
+                    if !removed {
+                        self.db.reloc(&mut cr, &mut to);
+                        self.learnts[j] = cr;
+                        j += 1;
+                    }
+                }
+                self.learnts.truncate(j);
             }
 
-            // Learnts
-            for cr in self.learnts.iter_mut() {
-                debug_assert!(!self.db[cr.0].free);
-                *cr = *map.get(cr).unwrap();
+            // All orignal:
+            {
+                let mut j = 0;
+                for i in 0..self.clauses.len() {
+                    let mut cr = self.clauses[i];
+                    let removed = self.db.get(cr).header.free();
+                    if !removed {
+                        self.db.reloc(&mut cr, &mut to);
+                        self.clauses[j] = cr;
+                        j += 1;
+                    }
+                }
+                self.clauses.truncate(j);
             }
 
-            // remove all freeded clauses
-            self.db.retain(|c| !c.free);
-            assert!(self.db.len() == map.len());
+            self.db = to;
         }
     }
 
@@ -639,6 +932,14 @@ pub mod solver {
         fn eval(&self, lit: Lit) -> LitBool {
             LitBool::from(self.assigns[lit.var()] as i8 ^ lit.neg() as i8)
         }
+        fn locked(&self, c: Lit, cref: CRef) -> bool {
+            if self.eval(c) == LitBool::True {
+                if let Some(reason) = self.reason[c.var()].as_ref() {
+                    return *reason == cref;
+                }
+            }
+            false
+        }
 
         fn num_assings(&self) -> usize {
             self.trail.stack.len()
@@ -943,33 +1244,34 @@ pub mod solver {
                         continue;
                     }
 
-                    let clause = &mut self.db[cr] as *mut Clause;
+                    let mut clause = self.db.db.get_mut(cr);
+
                     unsafe {
-                        debug_assert!(!(*clause).free);
-                        debug_assert!((*clause)[0] == !p || (*clause)[1] == !p);
+                        debug_assert!(!clause.header.free());
+                        debug_assert!(clause[0] == !p || clause[1] == !p);
 
                         // make sure that the clause[1] is the false literal.
-                        if (*clause)[0] == !p {
-                            (*clause).swap(0, 1);
+                        if clause[0] == !p {
+                            clause.swap(0, 1);
                         }
-                        let first = (*clause)[0];
+                        let first = clause[0];
                         let w = Watcher::new(cr, first);
                         // already satisfied
                         if first != blocker && self.vardata.eval(first) == LitBool::True {
-                            debug_assert!(first != (*clause)[1]);
+                            debug_assert!(first != clause[1]);
                             ws[idx] = w;
                             idx += 1;
                             continue 'next_clause;
                         }
 
-                        for k in 2..(*clause).len() {
-                            let lit = (*clause)[k];
+                        for k in 2..clause.len() {
+                            let lit = clause[k];
                             // Found a literal isn't false(true or undefined)
                             if self.vardata.eval(lit) != LitBool::False {
-                                (*clause).swap(1, k);
+                                clause.swap(1, k);
                                 ws.swap_remove(idx);
 
-                                (*watchers_ptr)[!(*clause)[1]].push(w);
+                                (*watchers_ptr)[!clause[1]].push(w);
                                 // NOTE
                                 // Don't increase `idx` because you replace and the idx element with the last one.
                                 continue 'next_clause;
@@ -998,29 +1300,25 @@ pub mod solver {
             }
             conflict
         }
-        fn locked(&self, cref: CRef) -> bool {
-            let c = self.db[cref][0];
-            if self.vardata.eval(c) == LitBool::True {
-                if let Some(reason) = self.vardata.reason[c.var()].as_ref() {
-                    return *reason == cref;
-                }
-            }
-            false
-        }
+
         fn unwatch_clause(&mut self, cref: CRef) {
-            let clause = &self.db[cref];
+            let clause = self.db.db.get(cref);
             let ws = &mut self.watchers[!clause[0]];
             ws.swap_remove(ws.iter().position(|&w| w.cref == cref).expect("Not found"));
             let ws = &mut self.watchers[!clause[1]];
             ws.swap_remove(ws.iter().position(|&w| w.cref == cref).expect("Not found"));
         }
         fn reduce_learnts(&mut self) {
-            let mut learnts: Vec<_> = self
-                .db
-                .learnts
+            let ca = &self.db.db;
+            let learnts = &mut self.db.learnts;
+            let mut learnts: Vec<_> = learnts
                 .iter()
-                .map(|&cr| (self.db[cr].activity(), self.db[cr].len(), cr))
+                .map(|&cr| {
+                    let clause = ca.get(cr);
+                    (clause.activity(), clause.len(), cr)
+                })
                 .collect();
+
             learnts.sort_by(|x, y| {
                 Ord::cmp(&(x.1 <= 2), &(y.1 <= 2))
                     .then(PartialOrd::partial_cmp(&x.0, &y.0).expect("NaN activity"))
@@ -1028,24 +1326,23 @@ pub mod solver {
             let n = learnts.len();
 
             let extra_lim = self.db.clause_inc / n as f32;
+
             debug_assert!(!extra_lim.is_nan());
 
             self.db.learnts.clear();
 
             for (i, (act, len, cr)) in learnts.into_iter().enumerate() {
                 debug_assert!(!act.is_nan());
-                if (i < n / 2 || act < extra_lim) && len > 2 && !self.locked(cr) {
+                let c = self.db.db.get(cr)[0];
+                if (i <= n / 2 || act < extra_lim) && len > 2 && !self.vardata.locked(c, cr) {
                     self.detach_clause(cr);
                 } else {
                     self.db.learnts.push(cr);
                 }
             }
 
-            self.db.collect_garbage_if_needed(
-                &mut self.watchers,
-                &mut self.vardata.reason,
-                &mut self.vardata.trail.stack,
-            );
+            self.db
+                .collect_garbage_if_needed(&mut self.watchers, &mut self.vardata);
         }
 
         fn pop_trail_until(&mut self, backtrack_level: usize) {
@@ -1072,7 +1369,8 @@ pub mod solver {
 
         fn detach_if_satisfied(&mut self, cr: CRef) -> bool {
             let mut detach = false;
-            for &lit in self.db[cr].iter() {
+            let clause = self.db.db.get(cr);
+            for &lit in clause.iter() {
                 if self.vardata.eval(lit) == LitBool::True {
                     self.detach_clause(cr);
                     detach = true;
@@ -1083,14 +1381,14 @@ pub mod solver {
         }
         fn detach_clause(&mut self, cr: CRef) {
             // A "lit" is a asserting clause
-            let lit = self.db[cr][0];
+            let lit = self.db.db.get(cr)[0];
             self.unwatch_clause(cr);
 
-            if self.locked(cr) {
+            if self.vardata.locked(lit, cr) {
                 debug_assert!(self.vardata.reason[lit.var()].is_some());
                 self.vardata.reason[lit.var()] = None;
             }
-            self.db.free(cr);
+            self.db.db.free(cr);
         }
 
         fn simplify(&mut self) -> bool {
@@ -1133,11 +1431,8 @@ pub mod solver {
                 self.db.clauses.truncate(new_size);
             }
 
-            self.db.collect_garbage_if_needed(
-                &mut self.watchers,
-                &mut self.vardata.reason,
-                &mut self.vardata.trail.stack,
-            );
+            self.db
+                .collect_garbage_if_needed(&mut self.watchers, &mut self.vardata);
 
             self.simplify_db.simp_db_assigns = self.vardata.num_assings() as i32;
             true
@@ -1155,7 +1450,7 @@ pub mod solver {
             let top = ccmin_clear.len();
             let mut redundant = true;
             'redundant: while let Some(cr) = ccmin_stack.pop() {
-                let clause = &self.db[cr];
+                let clause = self.db.db.get(cr);
 
                 for c in clause.iter().skip(1) {
                     if !seen[c.var()] && self.vardata.level(c.var()) > TOP_LEVEL {
@@ -1245,27 +1540,30 @@ pub mod solver {
 
             let mut same_level_cnt = 0;
 
-            if self.db[confl].learnt() {
-                self.db.bump_activity(confl);
-            }
+            {
+                let learnt = self.db.db.get(confl).header.learnt();
 
-            let clause = &self.db[confl];
+                if learnt {
+                    self.db.bump_activity(confl);
+                }
 
-            debug_assert!(!clause.free);
-            // implication graph nodes that are start point from a conflict clause.
-            for p in clause.iter() {
-                let var = p.var();
-                debug_assert!(self.vardata.eval(*p) != LitBool::Undef);
+                let clause = self.db.db.get(confl);
+                debug_assert!(!clause.header.free());
+                // implication graph nodes that are start point from a conflict clause.
+                for p in clause.iter() {
+                    let var = p.var();
+                    debug_assert!(self.vardata.eval(*p) != LitBool::Undef);
 
-                self.order_heap.bump_activity(var);
-                // already checked
-                self.analyzer.seen[var] = true;
+                    self.order_heap.bump_activity(var);
+                    // already checked
+                    self.analyzer.seen[var] = true;
 
-                //debug_assert!(self.vardata.level[var] <= decision_level);
-                if self.vardata.level(var) < decision_level {
-                    self.analyzer.learnt_clause.push(*p);
-                } else {
-                    same_level_cnt += 1;
+                    //debug_assert!(self.vardata.level[var] <= decision_level);
+                    if self.vardata.level(var) < decision_level {
+                        self.analyzer.learnt_clause.push(*p);
+                    } else {
+                        same_level_cnt += 1;
+                    }
                 }
             }
 
@@ -1292,11 +1590,13 @@ pub mod solver {
 
                     debug_assert!(self.vardata.reason[v].is_some());
                     let reason = self.vardata.reason[v].as_ref().expect("No reason");
-                    if self.db[*reason].learnt() {
+                    let learnt = self.db.db.get(*reason).header.learnt();
+
+                    if learnt {
                         self.db.bump_activity(*reason);
                     }
+                    let clause = self.db.db.get(*reason);
 
-                    let clause = &self.db[*reason];
                     for p in clause.iter().skip(1) {
                         let var = p.var();
                         // already checked
