@@ -88,7 +88,7 @@ pub mod solver {
 
     impl<'a> Index<usize> for ClauseRef<'a> {
         type Output = Lit;
-        fn index(&self, idx: usize) -> &'a Self::Output {
+        fn index(&self, idx: usize) -> &Self::Output {
             unsafe { &self.clause[idx].lit }
         }
     }
@@ -543,7 +543,7 @@ pub mod solver {
         }
 
         fn need_collect_garbage(&mut self) -> bool {
-            self.db.wasted() * 10 > self.db.len() * 3
+            self.db.wasted() * 10 > self.db.len() * 2
         }
 
         fn collect_garbage_if_needed(
@@ -608,6 +608,7 @@ pub mod solver {
                         j += 1;
                     }
                 }
+
                 self.clauses.truncate(j);
             }
 
@@ -1246,55 +1247,53 @@ pub mod solver {
 
                     let mut clause = self.db.db.get_mut(cr);
 
-                    unsafe {
-                        debug_assert!(!clause.header.free());
-                        debug_assert!(clause[0] == !p || clause[1] == !p);
+                    debug_assert!(!clause.header.free());
+                    debug_assert!(clause[0] == !p || clause[1] == !p);
 
-                        // make sure that the clause[1] is the false literal.
-                        if clause[0] == !p {
-                            clause.swap(0, 1);
-                        }
-                        let first = clause[0];
-                        let w = Watcher::new(cr, first);
-                        // already satisfied
-                        if first != blocker && self.vardata.eval(first) == LitBool::True {
-                            debug_assert!(first != clause[1]);
-                            ws[idx] = w;
-                            idx += 1;
+                    // make sure that the clause[1] is the false literal.
+                    if clause[0] == !p {
+                        clause.swap(0, 1);
+                    }
+                    let first = clause[0];
+                    let w = Watcher::new(cr, first);
+                    // already satisfied
+                    if first != blocker && self.vardata.eval(first) == LitBool::True {
+                        debug_assert!(first != clause[1]);
+                        ws[idx] = w;
+                        idx += 1;
+                        continue 'next_clause;
+                    }
+
+                    for k in 2..clause.len() {
+                        let lit = clause[k];
+                        // Found a literal isn't false(true or undefined)
+                        if self.vardata.eval(lit) != LitBool::False {
+                            clause.swap(1, k);
+                            ws.swap_remove(idx);
+
+                            unsafe { &mut (*watchers_ptr)[!clause[1]].push(w) };
+                            // NOTE
+                            // Don't increase `idx` because you replace and the idx element with the last one.
                             continue 'next_clause;
                         }
-
-                        for k in 2..clause.len() {
-                            let lit = clause[k];
-                            // Found a literal isn't false(true or undefined)
-                            if self.vardata.eval(lit) != LitBool::False {
-                                clause.swap(1, k);
-                                ws.swap_remove(idx);
-
-                                (*watchers_ptr)[!clause[1]].push(w);
-                                // NOTE
-                                // Don't increase `idx` because you replace and the idx element with the last one.
-                                continue 'next_clause;
-                            }
-                        }
-
-                        //debug_assert_eq!(watcher[idx], cr);
-
-                        if self.vardata.eval(first) == LitBool::False {
-                            // CONFLICT
-                            // a first literal(clause[0]) is false.
-                            // clause[1] is a false
-                            // clause[2..len] is a false
-                            conflict = Some(cr);
-                            break 'conflict;
-                        } else {
-                            // UNIT PROPAGATION
-                            // a first literal(clause[0]) isn't assigned.
-                            // clause[1] is a false
-                            // clause[2..len] is a false
-                            self.vardata.enqueue(first, Some(cr));
-                        }
                     }
+
+                    if self.vardata.eval(first) == LitBool::False {
+                        // CONFLICT
+                        // a first literal(clause[0]) is false.
+                        // clause[1] is a false
+                        // clause[2..len] is a false
+                        self.vardata.trail.peek_head = self.vardata.trail.stack.len();
+                        conflict = Some(cr);
+                        break 'conflict;
+                    } else {
+                        // UNIT PROPAGATION
+                        // a first literal(clause[0]) isn't assigned.
+                        // clause[1] is a false
+                        // clause[2..len] is a false
+                        self.vardata.enqueue(first, Some(cr));
+                    }
+
                     idx += 1;
                 }
             }
@@ -1309,37 +1308,41 @@ pub mod solver {
             ws.swap_remove(ws.iter().position(|&w| w.cref == cref).expect("Not found"));
         }
         fn reduce_learnts(&mut self) {
-            let ca = &self.db.db;
-            let learnts = &mut self.db.learnts;
-            let mut learnts: Vec<_> = learnts
-                .iter()
-                .map(|&cr| {
-                    let clause = ca.get(cr);
-                    (clause.activity(), clause.len(), cr)
-                })
-                .collect();
-
-            learnts.sort_by(|x, y| {
-                Ord::cmp(&(x.1 <= 2), &(y.1 <= 2))
-                    .then(PartialOrd::partial_cmp(&x.0, &y.0).expect("NaN activity"))
-            });
-            let n = learnts.len();
-
-            let extra_lim = self.db.clause_inc / n as f32;
-
+            let extra_lim = self.db.clause_inc / self.db.learnts.len() as f32;
             debug_assert!(!extra_lim.is_nan());
+            {
+                let ca = &self.db.db;
+                self.db.learnts.sort_unstable_by(|&x, &y| {
+                    let x = ca.get(x);
+                    let y = ca.get(y);
 
-            self.db.learnts.clear();
+                    Ord::cmp(&(x.len() <= 2), &(y.len() <= 2)).then(
+                        PartialOrd::partial_cmp(&x.activity(), &y.activity())
+                            .expect("NaN activity"),
+                    )
+                });
+            }
 
-            for (i, (act, len, cr)) in learnts.into_iter().enumerate() {
-                debug_assert!(!act.is_nan());
-                let c = self.db.db.get(cr)[0];
-                if (i <= n / 2 || act < extra_lim) && len > 2 && !self.vardata.locked(c, cr) {
+            let mut new_size = 0;
+            for i in 0..self.db.learnts.len() {
+                let cr = self.db.learnts[i];
+                let cla = self.db.db.get(cr);
+                let act = cla.activity();
+                let len = cla.len();
+
+                if (i < self.db.learnts.len() / 2 || act < extra_lim)
+                    && len > 2
+                    && !self.vardata.locked(cla[0], cr)
+                {
                     self.detach_clause(cr);
                 } else {
-                    self.db.learnts.push(cr);
+                    self.db.learnts[new_size] = cr;
+                    new_size += 1;
                 }
             }
+
+            //eprintln!("{} {}", new_size, self.db.learnts.len());
+            self.db.learnts.truncate(new_size);
 
             self.db
                 .collect_garbage_if_needed(&mut self.watchers, &mut self.vardata);
@@ -1388,6 +1391,8 @@ pub mod solver {
                 debug_assert!(self.vardata.reason[lit.var()].is_some());
                 self.vardata.reason[lit.var()] = None;
             }
+            self.db.db.get_mut(cr).header.set_mark(1);
+
             self.db.db.free(cr);
         }
 
@@ -1537,6 +1542,7 @@ pub mod solver {
 
             let decision_level = self.vardata.trail.decision_level();
             self.analyzer.learnt_clause.clear();
+            self.analyzer.learnt_clause.push(Lit::default());
 
             let mut same_level_cnt = 0;
 
@@ -1616,12 +1622,7 @@ pub mod solver {
             };
 
             // p is 1-UIP.
-            {
-                let p = first_uip.expect("Not found first uip");
-                self.analyzer.learnt_clause.push(!p);
-                let n = self.analyzer.learnt_clause.len();
-                self.analyzer.learnt_clause.swap(0, n - 1);
-            }
+            self.analyzer.learnt_clause[0] = !first_uip.expect("not found first uip");
 
             self.analyzer
                 .analyze_toclear
