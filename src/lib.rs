@@ -1584,7 +1584,6 @@ pub mod solver {
                         continue;
                     }
                     self.analyzer.seen[v] = false;
-                    self.order_heap.bump_activity(v);
 
                     debug_assert_eq!(self.vardata.level[v], decision_level);
                     same_level_cnt -= 1;
@@ -1609,6 +1608,7 @@ pub mod solver {
                         if self.analyzer.seen[var] {
                             continue;
                         }
+                        self.order_heap.bump_activity(var);
                         self.analyzer.seen[var] = true;
                         debug_assert!(self.vardata.level(var) <= decision_level);
                         if self.vardata.level(var) < decision_level {
