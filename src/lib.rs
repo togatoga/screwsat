@@ -1239,12 +1239,13 @@ pub mod solver {
                 let ws = &mut self.watchers[p];
                 'next_clause: while idx < ws.len() {
                     let blocker = ws[idx].blocker;
-                    let cr = ws[idx].cref;
+                    
                     if self.vardata.eval(blocker) == LitBool::True {
                         idx += 1;
                         continue;
                     }
-
+                    
+                    let cr = ws[idx].cref;
                     let mut clause = self.db.db.get_mut(cr);
 
                     debug_assert!(!clause.header.free());
@@ -1277,7 +1278,7 @@ pub mod solver {
                             continue 'next_clause;
                         }
                     }
-
+                    ws[idx] = w;
                     if self.vardata.eval(first) == LitBool::False {
                         // CONFLICT
                         // a first literal(clause[0]) is false.
