@@ -275,6 +275,7 @@ pub mod solver {
     }
 
     #[derive(Clone, Copy)]
+    #[repr(C)]
     union ClauseData {
         lit: Lit,
         abs: u32,
@@ -487,22 +488,16 @@ pub mod solver {
 
     impl Default for ClauseDB {
         fn default() -> Self {
-            let mut clause = ClauseDB::new();
-            clause.clause_inc = 1.0;
-            clause
+            ClauseDB {
+                clauses: Vec::default(),
+                learnts: Vec::default(),
+                db: ClauseAllocator::new(),
+                clause_inc: 1.0,
+            }
         }
     }
 
     impl ClauseDB {
-        pub fn new() -> ClauseDB {
-            ClauseDB {
-                clauses: Vec::new(),
-                learnts: Vec::new(),
-                clause_inc: 0.0,
-                db: ClauseAllocator::new(),
-            }
-        }
-
         fn bump_activity(&mut self, cr: CRef) {
             let act = {
                 let mut clause = self.db.get_mut(cr);
@@ -529,7 +524,7 @@ pub mod solver {
         }
 
         fn decay_inc(&mut self) {
-            self.clause_inc *= 1.0 / 0.999;
+            self.clause_inc /= 0.999;
         }
 
         pub fn push(&mut self, lits: &[Lit], learnt: bool) -> CRef {
@@ -728,7 +723,7 @@ pub mod solver {
             Some(self.heap[0])
         }
         pub fn decay_inc(&mut self) {
-            self.bump_inc *= 1.0 / 0.95;
+            self.bump_inc /= 0.95;
         }
         pub fn bump_activity(&mut self, v: Var) {
             self.activity[v] += self.bump_inc;
@@ -1100,7 +1095,7 @@ pub mod solver {
         pub fn new(n: usize, clauses: &[Vec<Lit>]) -> Solver {
             let mut solver = Solver {
                 n,
-                db: ClauseDB::new(),
+                db: ClauseDB::default(),
                 analyzer: Analayzer::new(n),
                 vardata: VarData::new(n),
                 order_heap: Heap::new(n, 1.0),
@@ -1239,12 +1234,12 @@ pub mod solver {
                 let ws = &mut self.watchers[p];
                 'next_clause: while idx < ws.len() {
                     let blocker = ws[idx].blocker;
-                    
+
                     if self.vardata.eval(blocker) == LitBool::True {
                         idx += 1;
                         continue;
                     }
-                    
+
                     let cr = ws[idx].cref;
                     let mut clause = self.db.db.get_mut(cr);
 
