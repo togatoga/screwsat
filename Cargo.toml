@@ -1,6 +1,6 @@
 [package]
 name = "screwsat"
-version = "2.1.4"
+version = "2.1.5"
 authors = ["togatoga <togasakitogatoga@gmail.com>"]
 edition = "2018"
 homepage = "https://github.com/togatoga/screwsat"
