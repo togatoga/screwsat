@@ -544,16 +544,27 @@ pub mod solver {
         fn collect_garbage_if_needed(
             &mut self,
             watchers: &mut Vec<Vec<Watcher>>,
+            bin_watchers: &mut Vec<Vec<Watcher>>,
             vardata: &mut VarData,
         ) {
             if self.need_collect_garbage() {
-                self.collect_garbage(watchers, vardata);
+                self.collect_garbage(watchers, bin_watchers, vardata);
             }
         }
-        fn collect_garbage(&mut self, watchers: &mut Vec<Vec<Watcher>>, vardata: &mut VarData) {
+        fn collect_garbage(
+            &mut self,
+            watchers: &mut Vec<Vec<Watcher>>,
+            bin_watchers: &mut Vec<Vec<Watcher>>,
+            vardata: &mut VarData,
+        ) {
             let mut to = ClauseAllocator::with_capacity(self.db.len() - self.db.wasted());
 
             for watcher in watchers.iter_mut() {
+                for ws in watcher.iter_mut() {
+                    self.db.reloc(&mut ws.cref, &mut to);
+                }
+            }
+            for watcher in bin_watchers.iter_mut() {
                 for ws in watcher.iter_mut() {
                     self.db.reloc(&mut ws.cref, &mut to);
                 }
@@ -944,7 +955,7 @@ pub mod solver {
         /// Enqueue a variable to assign a `value` to a boolean `assign`
         fn enqueue(&mut self, lit: Lit, reason: Option<CRef>) {
             debug_assert!(self.eval(lit) == LitBool::Undef);
-
+            debug_assert!(self.level(lit.var()) == TOP_LEVEL);
             self.assign(
                 lit.var(),
                 LitBool::from(lit.neg() as i8),
@@ -959,7 +970,7 @@ pub mod solver {
     struct RestartStrategy {
         /// The initial restart limit. (default 100)
         first: i32,
-        /// The factor with which the restart limit is multiplied in each restart. (default 1.5)
+        /// The factor with which the restart limit is multiplied in each restart. (default 2.5)
         inc: f64,
     }
 
@@ -967,7 +978,7 @@ pub mod solver {
         fn default() -> Self {
             RestartStrategy {
                 first: 100,
-                inc: 2.0,
+                inc: 2.5,
             }
         }
     }
@@ -1070,6 +1081,7 @@ pub mod solver {
         db: ClauseDB,
         // clauses that may be conflicted or propagated if a `lit` is false.
         watchers: Vec<Vec<Watcher>>,
+        bin_watchers: Vec<Vec<Watcher>>,
         // conflict analyzer
         analyzer: Analayzer,
         // variable data
@@ -1103,6 +1115,7 @@ pub mod solver {
                 learnt_size_start: LearntSizeStrategy::default(),
                 simplify_db: SimplifyDB::default(),
                 watchers: vec![vec![]; 2 * n],
+                bin_watchers: vec![vec![]; 2 * n],
                 status: None,
                 models: vec![LitBool::Undef; n],
             };
@@ -1130,6 +1143,8 @@ pub mod solver {
             // for literals
             self.watchers.push(Vec::new());
             self.watchers.push(Vec::new());
+            self.bin_watchers.push(Vec::new());
+            self.bin_watchers.push(Vec::new());
         }
 
         /// This method is only for internal usage and almost same as `add_clause`
@@ -1137,9 +1152,13 @@ pub mod solver {
         fn add_clause_db(&mut self, lits: &[Lit], learnt: bool) -> CRef {
             let cref = self.db.push(lits, learnt);
             debug_assert!(lits.len() >= 2);
-
-            self.watchers[!lits[0]].push(Watcher::new(cref, lits[1]));
-            self.watchers[!lits[1]].push(Watcher::new(cref, lits[0]));
+            if lits.len() == 2 {
+                self.bin_watchers[!lits[0]].push(Watcher::new(cref, lits[1]));
+                self.bin_watchers[!lits[1]].push(Watcher::new(cref, lits[0]));
+            } else {
+                self.watchers[!lits[0]].push(Watcher::new(cref, lits[1]));
+                self.watchers[!lits[1]].push(Watcher::new(cref, lits[0]));
+            }
             cref
         }
         /// Add a new clause to `clauses` and watch a clause.
@@ -1214,8 +1233,13 @@ pub mod solver {
                 let l2 = clause[1];
                 let cref = self.db.push(&clause, false);
 
-                self.watchers[!l1].push(Watcher::new(cref, l2));
-                self.watchers[!l2].push(Watcher::new(cref, l1));
+                if clause.len() == 2 {
+                    self.bin_watchers[!l1].push(Watcher::new(cref, l2));
+                    self.bin_watchers[!l2].push(Watcher::new(cref, l1));
+                } else {
+                    self.watchers[!l1].push(Watcher::new(cref, l2));
+                    self.watchers[!l2].push(Watcher::new(cref, l1));
+                }
             }
         }
 
@@ -1229,9 +1253,37 @@ pub mod solver {
                 self.vardata.trail.advance();
                 debug_assert!(self.vardata.assigns[p.var()] != LitBool::Undef);
 
+                {
+                    //First propagate binary clauses
+                    let ws = &self.bin_watchers[p];
+                    for w in ws.iter() {
+                        let imp = w.blocker;
+                        debug_assert!({
+                            let clause = self.db.db.get(w.cref);
+                            debug_assert!(clause.len() == 2);
+                            true
+                        });
+                        let mut clause = self.db.db.get_mut(w.cref);
+                        if clause[0] == !p {
+                            clause.swap(0, 1);
+                        }
+                        match self.vardata.eval(imp) {
+                            LitBool::False => {
+                                self.vardata.trail.peek_head = self.vardata.trail.stack.len();
+                                return Some(w.cref);
+                            }
+                            LitBool::Undef => {
+                                self.vardata.enqueue(imp, Some(w.cref));
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+
                 let mut idx = 0;
                 let watchers_ptr = &mut self.watchers as *mut Vec<Vec<Watcher>>;
                 let ws = &mut self.watchers[p];
+
                 'next_clause: while idx < ws.len() {
                     let blocker = ws[idx].blocker;
 
@@ -1293,15 +1345,23 @@ pub mod solver {
                     idx += 1;
                 }
             }
+
             conflict
         }
 
         fn unwatch_clause(&mut self, cref: CRef) {
             let clause = self.db.db.get(cref);
-            let ws = &mut self.watchers[!clause[0]];
-            ws.swap_remove(ws.iter().position(|&w| w.cref == cref).expect("Not found"));
-            let ws = &mut self.watchers[!clause[1]];
-            ws.swap_remove(ws.iter().position(|&w| w.cref == cref).expect("Not found"));
+            if clause.len() == 2 {
+                let ws = &mut self.bin_watchers[!clause[0]];
+                ws.swap_remove(ws.iter().position(|&w| w.cref == cref).expect("Not found"));
+                let ws = &mut self.bin_watchers[!clause[1]];
+                ws.swap_remove(ws.iter().position(|&w| w.cref == cref).expect("Not found"));
+            } else {
+                let ws = &mut self.watchers[!clause[0]];
+                ws.swap_remove(ws.iter().position(|&w| w.cref == cref).expect("Not found"));
+                let ws = &mut self.watchers[!clause[1]];
+                ws.swap_remove(ws.iter().position(|&w| w.cref == cref).expect("Not found"));
+            }
         }
         fn reduce_learnts(&mut self) {
             let extra_lim = self.db.clause_inc / self.db.learnts.len() as f32;
@@ -1337,11 +1397,13 @@ pub mod solver {
                 }
             }
 
-            //eprintln!("{} {}", new_size, self.db.learnts.len());
             self.db.learnts.truncate(new_size);
 
-            self.db
-                .collect_garbage_if_needed(&mut self.watchers, &mut self.vardata);
+            self.db.collect_garbage_if_needed(
+                &mut self.watchers,
+                &mut self.bin_watchers,
+                &mut self.vardata,
+            );
         }
 
         fn pop_trail_until(&mut self, backtrack_level: usize) {
@@ -1361,6 +1423,7 @@ pub mod solver {
                 self.vardata.reason[x] = None;
                 self.vardata.level[x] = TOP_LEVEL;
             }
+
             trail.peek_head = sep;
             trail.stack.truncate(sep);
             trail.stack_limit.truncate(backtrack_level);
@@ -1432,8 +1495,11 @@ pub mod solver {
                 self.db.clauses.truncate(new_size);
             }
 
-            self.db
-                .collect_garbage_if_needed(&mut self.watchers, &mut self.vardata);
+            self.db.collect_garbage_if_needed(
+                &mut self.watchers,
+                &mut self.bin_watchers,
+                &mut self.vardata,
+            );
 
             self.simplify_db.simp_db_assigns = self.vardata.num_assings() as i32;
             true
@@ -1581,21 +1647,21 @@ pub mod solver {
                     }
                     self.analyzer.seen[v] = false;
 
-                    debug_assert_eq!(self.vardata.level[v], decision_level);
                     same_level_cnt -= 1;
+
                     // There is no variables that are at the conflict level
                     if same_level_cnt <= 0 {
                         p = Some(lit);
                         break;
                     }
-
-                    debug_assert!(self.vardata.reason[v].is_some());
+                    debug_assert_eq!(self.vardata.level[v], decision_level);
                     let reason = self.vardata.reason[v].as_ref().expect("No reason");
                     let learnt = self.db.db.get(*reason).header.learnt();
 
                     if learnt {
                         self.db.bump_activity(*reason);
                     }
+
                     let clause = self.db.db.get(*reason);
 
                     for p in clause.iter().skip(1) {
@@ -1746,6 +1812,7 @@ pub mod solver {
             if let Some(status) = self.status.as_ref() {
                 return *status;
             }
+
             let start = Instant::now();
             // Initialization
             self.learnt_size_start.init(self.db.clauses.len());
