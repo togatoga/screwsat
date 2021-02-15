@@ -2,7 +2,7 @@
 set -u
 
 SOLVER=$1
-TIMELIMIT=$2
+TIMELIMIT=300
 
 sat=0
 unsat=0
