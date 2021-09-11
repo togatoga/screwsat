@@ -32,7 +32,7 @@ fn main() {
             };
             print!("x{} = {} ", var + 1, b);
         });
-        println!("");
+        println!();
     }
 
     {
