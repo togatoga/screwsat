@@ -581,8 +581,8 @@ pub mod solver {
                         false
                     };
                     if cond {
-                        let mut cref = vardata.reason[lit.var()].as_mut().expect("not found");
-                        self.db.reloc(&mut cref, &mut to);
+                        let cref = vardata.reason[lit.var()].as_mut().expect("not found");
+                        self.db.reloc(cref, &mut to);
                     }
                 }
             }
