@@ -1,6 +1,6 @@
 [package]
 name = "screwsat"
-version = "2.1.6"
+version = "2.1.7"
 authors = ["togatoga <hitoshitogasaki@gmail.com>"]
 edition = "2024"
 rust-version = "1.85"
