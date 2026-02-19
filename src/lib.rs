@@ -41,7 +41,7 @@ pub mod solver {
         #[inline]
         fn from(x: i32) -> Self {
             debug_assert!(x != 0);
-            let d = x.abs() as u32 - 1;
+            let d = x.unsigned_abs() - 1;
             if x > 0 {
                 Lit(d << 1)
             } else {
@@ -73,7 +73,7 @@ pub mod solver {
             self.clause.len()
         }
         #[allow(dead_code)]
-        fn iter(&self) -> ClauseIter {
+        fn iter(&self) -> ClauseIter<'_> {
             ClauseIter(self.clause.iter())
         }
         pub fn reloced(&self) -> bool {
@@ -113,11 +113,11 @@ pub mod solver {
             self.clause.swap(x, y);
         }
         #[allow(dead_code)]
-        fn iter(&self) -> ClauseIter {
+        fn iter(&self) -> ClauseIter<'_> {
             ClauseIter(self.clause.iter())
         }
         #[allow(dead_code)]
-        fn iter_mut(&mut self) -> ClauseIterMut {
+        fn iter_mut(&mut self) -> ClauseIterMut<'_> {
             ClauseIterMut(self.clause.iter_mut())
         }
         pub fn reloced(&self) -> bool {
@@ -136,7 +136,7 @@ pub mod solver {
             self.clause[0].cref = c;
         }
 
-        pub fn as_clause_ref(&mut self) -> ClauseRef {
+        pub fn as_clause_ref(&mut self) -> ClauseRef<'_> {
             ClauseRef {
                 header: *self.header,
                 clause: self.clause,
@@ -154,7 +154,7 @@ pub mod solver {
 
     impl<'a> IndexMut<usize> for ClauseMut<'a> {
         fn index_mut(&mut self, index: usize) -> &mut Self::Output {
-            unsafe { &mut self.clause[index as usize].lit }
+            unsafe { &mut self.clause[index].lit }
         }
     }
 
@@ -247,8 +247,7 @@ pub mod solver {
 
         fn alloc(&mut self, size: usize) -> Ref<T> {
             let r = self.len();
-            self.data.extend((0..size).map(|_| T::default()));
-
+            self.data.resize_with(r + size, T::default);
             Ref(r, PhantomData)
         }
 
@@ -386,11 +385,11 @@ pub mod solver {
                 ClauseHeader::new(0, learnt, use_extra, false, clause.len() as u32);
             let clause_ptr = cid + 1;
             for (i, &lit) in clause.iter().enumerate() {
-                self.ra[clause_ptr + i as usize].lit = lit;
+                self.ra[clause_ptr + i].lit = lit;
             }
 
             if learnt {
-                self.ra[clause_ptr + clause.len() as usize].act = 0.0;
+                self.ra[clause_ptr + clause.len()].act = 0.0;
             }
 
             cid
@@ -405,10 +404,10 @@ pub mod solver {
             // NOTE: the copied clause may lose the extra field.
             unsafe { &mut self.ra[cid].header }.set_has_extra(use_extra);
             for (i, &lit) in from.iter().enumerate() {
-                self.ra[cid + 1 + i as usize].lit = lit;
+                self.ra[cid + 1 + i].lit = lit;
             }
             if use_extra {
-                self.ra[cid + 1 + from.len() as usize] = from.extra.expect("Extra");
+                self.ra[cid + 1 + from.len()] = from.extra.expect("Extra");
             }
             cid
         }
@@ -433,7 +432,7 @@ pub mod solver {
             c.relocate(*cr);
         }
 
-        fn get(&self, cref: CRef) -> ClauseRef {
+        fn get(&self, cref: CRef) -> ClauseRef<'_> {
             let header = unsafe { self.ra[cref].header };
             let has_extra = header.has_extra();
             let size = header.size();
@@ -450,7 +449,7 @@ pub mod solver {
                 extra,
             }
         }
-        fn get_mut(&mut self, cref: CRef) -> ClauseMut {
+        fn get_mut(&mut self, cref: CRef) -> ClauseMut<'_> {
             let header = unsafe { self.ra[cref].header };
             let has_extra = header.has_extra();
             let size = header.size();
@@ -503,7 +502,7 @@ pub mod solver {
                 let mut clause = self.db.get_mut(cr);
                 //debug_assert!(self[cr].learnt());
                 //debug_assert!(self.clause_inc >= 0.0);
-                let new_act = clause.activity() + self.clause_inc as f32;
+                let new_act = clause.activity() + self.clause_inc;
                 clause.set_activity(new_act);
                 new_act
             };
@@ -543,8 +542,8 @@ pub mod solver {
 
         fn collect_garbage_if_needed(
             &mut self,
-            watchers: &mut Vec<Vec<Watcher>>,
-            bin_watchers: &mut Vec<Vec<Watcher>>,
+            watchers: &mut [Vec<Watcher>],
+            bin_watchers: &mut [Vec<Watcher>],
             vardata: &mut VarData,
         ) {
             if self.need_collect_garbage() {
@@ -553,8 +552,8 @@ pub mod solver {
         }
         fn collect_garbage(
             &mut self,
-            watchers: &mut Vec<Vec<Watcher>>,
-            bin_watchers: &mut Vec<Vec<Watcher>>,
+            watchers: &mut [Vec<Watcher>],
+            bin_watchers: &mut [Vec<Watcher>],
             vardata: &mut VarData,
         ) {
             let mut to = ClauseAllocator::with_capacity(self.db.len() - self.db.wasted());
@@ -678,7 +677,7 @@ pub mod solver {
         fn index(&self, lit: Lit) -> &Self::Output {
             #[cfg(feature = "unsafe")]
             unsafe {
-                &self.get_unchecked(lit.0 as usize)
+                self.get_unchecked(lit.0 as usize)
             }
             #[cfg(not(feature = "unsafe"))]
             &self[lit.0 as usize]
@@ -740,8 +739,8 @@ pub mod solver {
             self.activity[v] += self.bump_inc;
 
             if self.activity[v] >= 1e100 {
-                for i in 0..self.activity.len() {
-                    self.activity[i] *= 1e-100;
+                for act in self.activity.iter_mut() {
+                    *act *= 1e-100;
                 }
                 self.bump_inc *= 1e-100;
             }
@@ -837,13 +836,13 @@ pub mod solver {
             self.up(self.indices[v].expect("No index"));
         }
 
-        fn in_heap(&mut self, v: Var) -> bool {
+        fn in_heap(&self, v: Var) -> bool {
             (v.0 as usize) < self.indices.len() && self.indices[v].is_some()
         }
     }
 
     #[derive(Debug, Default)]
-    struct Analayzer {
+    struct Analyzer {
         seen: Vec<bool>,
         ccmin_stack: Vec<CRef>,
         ccmin_clear: Vec<Lit>,
@@ -851,9 +850,9 @@ pub mod solver {
         learnt_clause: Vec<Lit>,
     }
 
-    impl Analayzer {
-        fn new(n: usize) -> Analayzer {
-            Analayzer {
+    impl Analyzer {
+        fn new(n: usize) -> Analyzer {
+            Analyzer {
                 seen: vec![false; n],
                 ccmin_stack: Vec::new(),
                 ccmin_clear: Vec::new(),
@@ -881,7 +880,7 @@ pub mod solver {
                 peek_head: 0,
             }
         }
-        fn new_descion_level(&mut self) {
+        fn new_decision_level(&mut self) {
             self.stack_limit.push(self.stack.len());
         }
         #[inline]
@@ -948,7 +947,7 @@ pub mod solver {
             false
         }
 
-        fn num_assings(&self) -> usize {
+        fn num_assigns(&self) -> usize {
             self.trail.stack.len()
         }
 
@@ -1083,7 +1082,7 @@ pub mod solver {
         watchers: Vec<Vec<Watcher>>,
         bin_watchers: Vec<Vec<Watcher>>,
         // conflict analyzer
-        analyzer: Analayzer,
+        analyzer: Analyzer,
         // variable data
         vardata: VarData,
         order_heap: Heap,
@@ -1108,7 +1107,7 @@ pub mod solver {
             let mut solver = Solver {
                 n,
                 db: ClauseDB::default(),
-                analyzer: Analayzer::new(n),
+                analyzer: Analyzer::new(n),
                 vardata: VarData::new(n),
                 order_heap: Heap::new(n, 1.0),
                 restart_strat: RestartStrategy::default(),
@@ -1229,17 +1228,7 @@ pub mod solver {
                 }
             } else {
                 debug_assert!(clause.len() >= 2);
-                let l1 = clause[0];
-                let l2 = clause[1];
-                let cref = self.db.push(&clause, false);
-
-                if clause.len() == 2 {
-                    self.bin_watchers[!l1].push(Watcher::new(cref, l2));
-                    self.bin_watchers[!l2].push(Watcher::new(cref, l1));
-                } else {
-                    self.watchers[!l1].push(Watcher::new(cref, l2));
-                    self.watchers[!l2].push(Watcher::new(cref, l1));
-                }
+                self.add_clause_db(&clause, false);
             }
         }
 
@@ -1319,7 +1308,7 @@ pub mod solver {
                             clause.swap(1, k);
                             ws.swap_remove(idx);
 
-                            unsafe { &mut (*watchers_ptr)[!clause[1]].push(w) };
+                            unsafe { (&mut *watchers_ptr)[!clause[1]].push(w) };
                             // NOTE
                             // Don't increase `idx` because you replace and the idx element with the last one.
                             continue 'next_clause;
@@ -1461,7 +1450,7 @@ pub mod solver {
             if self.propagate().is_some() {
                 return false;
             }
-            if self.vardata.num_assings() as i32 == self.simplify_db.simp_db_assigns {
+            if self.vardata.num_assigns() as i32 == self.simplify_db.simp_db_assigns {
                 return true;
             }
 
@@ -1501,7 +1490,7 @@ pub mod solver {
                 &mut self.vardata,
             );
 
-            self.simplify_db.simp_db_assigns = self.vardata.num_assings() as i32;
+            self.simplify_db.simp_db_assigns = self.vardata.num_assigns() as i32;
             true
         }
 
@@ -1791,7 +1780,7 @@ pub mod solver {
                                 continue;
                             }
                             let lit = Lit::new(v.0, self.vardata.polarity[v]);
-                            self.vardata.trail.new_descion_level();
+                            self.vardata.trail.new_decision_level();
                             self.vardata.enqueue(lit, None);
                             break;
                         } else {
@@ -1807,7 +1796,7 @@ pub mod solver {
         /// Solve a problem and return a enum `Status`.
         /// # Arguments
         /// * `time_limit` - The time limitation for searching.
-        /// Exceeding the time limit returns `Indeterminate`
+        ///   Exceeding the time limit returns `Indeterminate`
         pub fn solve(&mut self, time_limit: Option<Duration>) -> Status {
             if let Some(status) = self.status.as_ref() {
                 return *status;
@@ -1850,15 +1839,15 @@ pub mod util {
         // all problem clauses
         pub clauses: Vec<Vec<Lit>>,
     }
-    /// Parse a DIMACAS cnf file
+    /// Parse a DIMACS cnf file
     /// # Arguments
     /// * `input_file` - A path of an input file name
-    /// c Here is a comment.
-    /// c SATISFIABLE
-    /// p cnf 5 3
-    /// 1 -5 4 0
-    /// -1 5 3 4 0
-    /// -3 -4 0
+    ///   c Here is a comment.
+    ///   c SATISFIABLE
+    ///   p cnf 5 3
+    ///   1 -5 4 0
+    ///   -1 5 3 4 0
+    ///   -3 -4 0
     pub fn parse_cnf<R: std::io::Read>(input: R) -> std::io::Result<CnfData> {
         let reader = std::io::BufReader::new(input);
         let mut var_num = None;

@@ -98,18 +98,16 @@ mod tests {
                     continue;
                 }
                 if status != expected {
-                    eprintln!(
+                    panic!(
                         "cnf: {}, Result: {:?} Expected: {:?}",
                         path_str, status, expected
                     );
-                    assert!(false);
                 }
                 if status == Status::Sat && !sat_model_check(&cnf.clauses, &solver.models) {
-                    eprintln!(
+                    panic!(
                         "Assignments are wrong!! cnf: {}, Result: {:?} Expected: {:?}",
                         path_str, status, expected
                     );
-                    assert!(false);
                 }
             }
         }

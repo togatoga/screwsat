@@ -2,10 +2,11 @@
 name = "screwsat"
 version = "2.1.6"
 authors = ["togatoga <hitoshitogasaki@gmail.com>"]
-edition = "2018"
+edition = "2024"
+rust-version = "1.85"
 homepage = "https://github.com/togatoga/screwsat"
 repository = "https://github.com/togatoga/screwsat"
-description = "A simple condlict driven clause learning sat solver"
+description = "A simple conflict-driven clause learning sat solver"
 license = "MIT"
 readme = "README.md"
 exclude = ["cnf"]

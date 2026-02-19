@@ -95,10 +95,10 @@ fn clauses_from_sudoku(board: &[Vec<u32>]) -> Vec<Vec<Lit>> {
         }
     }
 
-    for y in 0..n {
-        for x in 0..n {
-            if board[y][x] > 0 {
-                let lit = lit_from_pos_and_val(n, y, x, board[y][x] as usize);
+    for (y, row) in board.iter().enumerate() {
+        for (x, &val) in row.iter().enumerate() {
+            if val > 0 {
+                let lit = lit_from_pos_and_val(n, y, x, val as usize);
                 clauses.push(vec![lit]);
             }
         }
@@ -137,12 +137,12 @@ fn print_sudoku(board: &[Vec<u32>], colored: &[Vec<u32>]) {
 
 fn board_from_assign(n: usize, assigns: &[LitBool]) -> Vec<Vec<u32>> {
     let mut board = vec![vec![0; n]; n];
-    for y in 0..n {
-        for x in 0..n {
+    for (y, row) in board.iter_mut().enumerate() {
+        for (x, cell) in row.iter_mut().enumerate() {
             for v in 1..=n {
                 let var = lit_from_pos_and_val(n, y, x, v).var().0 as usize;
                 if assigns[var] == LitBool::True {
-                    board[y][x] = v as u32;
+                    *cell = v as u32;
                     break;
                 }
             }
